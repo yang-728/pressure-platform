@@ -21,3 +21,4 @@ class Node(Base, AuditMixin):
     password: Mapped[str] = mapped_column(String(128), default="", server_default="")
     port: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     status: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
+    region: Mapped[str] = mapped_column(String(255), default="", server_default="")

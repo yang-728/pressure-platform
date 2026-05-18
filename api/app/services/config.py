@@ -101,6 +101,7 @@ async def get_options(db: AsyncSession, type: str) -> list[str]:
         "biz": "BIZ_OPTIONS",
         "service": "SERVICE_OPTIONS",
         "version": "VERSION_OPTIONS",
+        "region": "REGION_OPTIONS",
     }
     key = key_map.get(type)
     if key is None:

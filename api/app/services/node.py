@@ -53,6 +53,7 @@ async def add_node(db: AsyncSession, param: NodeParam, user: UserContext) -> int
         password=param.password or "",
         port=param.port or 0,
         status=NodeStatus.DISABLED.value,
+        region=param.region or "",
     )
     stamp_create(obj, user)
     await crud.add(db, obj)
@@ -67,7 +68,7 @@ async def update_node(
         return False
 
     sent = param.model_dump(exclude_unset=True, exclude_none=True, by_alias=False)
-    for field in ("name", "description", "type", "host", "username", "password", "port"):
+    for field in ("name", "description", "type", "host", "username", "password", "port", "region"):
         if field in sent:
             setattr(existing, field, sent[field])
     stamp_modify(existing, user)
@@ -108,6 +109,17 @@ async def get_enable_slave_list(db: AsyncSession) -> list[NodeVO]:
     """给 Phase 5 的 JMeter 分布式调度用。仅查 type=SLAVE && status=ENABLE 的节点。"""
     nodes = await crud.list_enable_slaves(db)
     return [_to_vo(n, mask_password=False) for n in nodes]
+
+
+async def get_enable_slave_count(db: AsyncSession, region: str | None = None) -> int:
+    """返回已启用的 slave 节点数量，可选按区域过滤。"""
+    nodes = await crud.list_enable_slaves(db, region=region)
+    return len(nodes)
+
+
+async def get_all_regions(db: AsyncSession) -> list[str]:
+    """返回所有启用 slave 的区域列表（去重），供前端下拉选择。"""
+    return await crud.get_all_regions(db)
 
 
 # ---------------------------------------------------------------------------

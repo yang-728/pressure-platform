@@ -92,4 +92,6 @@ class Codes:
     SCRIPT_TYPE_ERROR = Code(1062, "调试类型异常", False)
     STRESS_RESULT = Code(1063, "请根据[日志]和[预览]了解压测详情", False)
 
+    SCHEDULED_TASK_NOT_EXIST = Code(1070, "定时任务不存在", False)
+
     SYSTEM_ERROR = Code(9999, "系统异常", False)

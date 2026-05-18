@@ -18,6 +18,7 @@ from app.api.v1.jar import router as jar_router
 from app.api.v1.jmx import router as jmx_router
 from app.api.v1.node import router as node_router
 from app.api.v1.report import router as report_router
+from app.api.v1.scheduled_task import router as scheduled_task_router
 from app.api.v1.testcase import router as testcase_router
 from app.api.v1.user import router as user_router
 from app.core.config import get_settings
@@ -41,9 +42,13 @@ async def lifespan(app: FastAPI):
         await ensure_admin_user(db)
 
     try:
+        # 启动定时任务调度器
+        from app.services.scheduled_task import start_scheduler, stop_scheduler
+        start_scheduler(poll_interval=60)
         yield
     finally:
         log.info("Mysterious API shutting down")
+        await stop_scheduler()
         await dispose_engine()
         await dispose_redis()
 
@@ -82,6 +87,7 @@ def create_app() -> FastAPI:
     app.include_router(csv_router)
     app.include_router(jar_router)
     app.include_router(report_router)
+    app.include_router(scheduled_task_router)
 
     # 报告预览静态文件服务
     reports_dir = "/root/PyProject/mysterious-data"

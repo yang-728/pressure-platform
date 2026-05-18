@@ -44,24 +44,30 @@ async def count(
     db: AsyncSession,
     name: str | None = None,
     test_case_id: int | None = None,
+    region: str | None = None,
 ) -> int:
     stmt = select(func.count()).select_from(Report)
     if name is not None:
         stmt = stmt.where(Report.name.like(f"%{name}%"))
     if test_case_id is not None:
         stmt = stmt.where(Report.test_case_id == test_case_id)
+    if region is not None:
+        stmt = stmt.where(Report.region.like(f"%{region}%"))
     return (await db.execute(stmt)).scalar_one() or 0
 
 
 async def list_reports(
     db: AsyncSession,
     name: str | None,
+    region: str | None,
     offset: int,
     limit: int,
 ) -> list[Report]:
     stmt = select(Report)
     if name is not None:
         stmt = stmt.where(Report.name.like(f"%{name}%"))
+    if region is not None:
+        stmt = stmt.where(Report.region.like(f"%{region}%"))
     stmt = stmt.order_by(Report.modify_time.desc()).offset(offset).limit(limit)
     return list((await db.execute(stmt)).scalars().all())
 
@@ -79,6 +85,28 @@ async def list_by_test_case(
     if test_case_id is not None:
         stmt = stmt.where(Report.test_case_id == test_case_id)
     stmt = stmt.order_by(Report.modify_time.desc()).offset(offset).limit(limit)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def get_running_by_testcase_region(
+    db: AsyncSession, test_case_id: int, region: str
+) -> list[Report]:
+    """检查某用例在某区域是否已有 RUN_ING 状态的报告"""
+    from app.core.enums import TestCaseStatus
+
+    stmt = select(Report).where(
+        Report.test_case_id == test_case_id,
+        Report.region == region,
+        Report.status == TestCaseStatus.RUN_ING.value,
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def has_any_running(db: AsyncSession) -> list[Report]:
+    """查询所有 RUN_ING 状态的报告（用于前端执行队列自动刷新判断）"""
+    from app.core.enums import TestCaseStatus
+
+    stmt = select(Report).where(Report.status == TestCaseStatus.RUN_ING.value)
     return list((await db.execute(stmt)).scalars().all())
 
 

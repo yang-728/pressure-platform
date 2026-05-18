@@ -67,12 +67,34 @@ async def list_nodes(
     return list((await db.execute(stmt)).scalars().all())
 
 
-async def list_enable_slaves(db: AsyncSession) -> list[Node]:
-    """获取所有启用中的 slave 节点，给 Phase 5 的 JMeter 分布式调度用"""
+async def list_enable_slaves(
+    db: AsyncSession, region: str | None = None
+) -> list[Node]:
+    """获取所有启用中的 slave 节点，可选按区域过滤"""
     from app.core.enums import NodeStatus, NodeType
 
     stmt = select(Node).where(
         Node.type == NodeType.SLAVE.value,
         Node.status == NodeStatus.ENABLE.value,
     )
+    if region:
+        stmt = stmt.where(Node.region.like(f"%{region}%"))
     return list((await db.execute(stmt)).scalars().all())
+
+
+async def get_all_regions(db: AsyncSession) -> list[str]:
+    """聚合所有启用 slave 节点的 region 字段，去重返回区域列表"""
+    from app.core.enums import NodeStatus, NodeType
+
+    stmt = select(Node.region).where(
+        Node.type == NodeType.SLAVE.value,
+        Node.status == NodeStatus.ENABLE.value,
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+    regions: set[str] = set()
+    for row in rows:
+        for r in (row or "").split(","):
+            r = r.strip()
+            if r:
+                regions.add(r)
+    return sorted(regions)

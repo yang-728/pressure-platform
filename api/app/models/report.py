@@ -22,5 +22,6 @@ class Report(Base, AuditMixin):
     status: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
     response_data: Mapped[str] = mapped_column(String(512), default="", server_default="")
     jmeter_log_file_path: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    region: Mapped[str] = mapped_column(String(255), default="", server_default="")
 
     __table_args__ = (Index("idx_test_case_id_report", "test_case_id"),)

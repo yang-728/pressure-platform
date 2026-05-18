@@ -148,6 +148,21 @@ async def stop_testcase(
 
 
 @router.get(
+    "/stopExecution/{report_id}",
+    summary="停止指定执行（按报告ID）",
+    response_model=Response[bool],
+    response_model_by_alias=True,
+)
+async def stop_execution(
+    report_id: int,
+    current: UserContext = Depends(get_current_user_dep),
+    db: AsyncSession = Depends(get_db),
+) -> Response[bool]:
+    ok = await service.stop_execution(db, report_id, current)
+    return success(ok)
+
+
+@router.get(
     "/getFull/{id}",
     summary="查询所有依赖信息",
     response_model=Response[TestCaseFullVO | None],

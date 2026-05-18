@@ -16,6 +16,7 @@ class ReportParam(CamelModel):
     status: int | None = None
     response_data: str | None = None
     jmeter_log_file_path: str | None = None
+    region: str | None = None
 
 
 class ReportVO(BaseVO):
@@ -27,12 +28,14 @@ class ReportVO(BaseVO):
     status: int = 0
     response_data: str = ""
     jmeter_log_file_path: str = ""
+    region: str = ""
 
 
 class ReportQuery(BaseQuery):
     """对齐 Java ReportQuery：模糊 name"""
 
     name: str | None = None
+    region: str | None = None
 
 
 class ReportByTestCaseQuery(BaseQuery):
@@ -40,3 +43,4 @@ class ReportByTestCaseQuery(BaseQuery):
 
     name: str | None = None
     test_case_id: int | None = None
+    region: str | None = None

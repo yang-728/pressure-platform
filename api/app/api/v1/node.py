@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import UserContext
@@ -90,6 +90,33 @@ async def list_nodes(
 ) -> Response[PageVO[NodeVO]]:
     page = await service.get_node_list(db, query)
     return success(page)
+
+
+@router.get(
+    "/regions",
+    summary="获取所有启用 slave 的区域列表",
+    response_model=Response[list[str]],
+    response_model_by_alias=True,
+)
+async def list_regions(
+    db: AsyncSession = Depends(get_db),
+) -> Response[list[str]]:
+    regions = await service.get_all_regions(db)
+    return success(regions)
+
+
+@router.get(
+    "/enableSlaveCount",
+    summary="获取已启用的 slave 节点数量，可选按区域过滤",
+    response_model=Response[int],
+    response_model_by_alias=True,
+)
+async def enable_slave_count(
+    region: str | None = Query(None, description="区域名称，为空则查全部"),
+    db: AsyncSession = Depends(get_db),
+) -> Response[int]:
+    cnt = await service.get_enable_slave_count(db, region=region)
+    return success(cnt)
 
 
 @router.get(

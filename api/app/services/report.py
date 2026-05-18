@@ -44,6 +44,7 @@ async def add_report(db: AsyncSession, param: ReportParam, user: UserContext) ->
         status=param.status if param.status is not None else 0,
         response_data=param.response_data or "",
         jmeter_log_file_path=param.jmeter_log_file_path or "",
+        region=param.region or "",
     )
     stamp_create(obj, user)
     await crud.add(db, obj)
@@ -68,12 +69,12 @@ async def get_by_id(db: AsyncSession, id: int) -> ReportVO | None:
 
 async def get_report_list(db: AsyncSession, query: ReportQuery) -> PageVO[ReportVO]:
     page_vo: PageVO[ReportVO] = PageVO(page=query.page, size=query.size, total=0, list=[])
-    total = await crud.count(db, name=query.name)
+    total = await crud.count(db, name=query.name, region=query.region)
     if total <= 0:
         return page_vo
     page_vo.total = total
     offset = PageVO.offset(query.page, query.size)
-    items = await crud.list_reports(db, name=query.name, offset=offset, limit=query.size)
+    items = await crud.list_reports(db, name=query.name, region=query.region, offset=offset, limit=query.size)
     page_vo.list = [_to_vo(o) for o in items]
     return page_vo
 
@@ -224,3 +225,39 @@ async def get_jmeter_log(db: AsyncSession, id: int) -> str:
     except OSError as e:
         log.warning("读取 jmeter.log 失败: %s", e)
         raise MysteriousException(Codes.FAIL, message="日志读取失败") from e
+
+
+async def get_jmeter_result_by_report(db: AsyncSession, report_id: int) -> list:
+    """读取指定报告 jmeter.log 的实时 summary 数据。"""
+    from app.schemas.testcase import JMeterResultVO
+    import re
+
+    _RESULT_RE = re.compile(
+        r"\d{4}-\d{2}-\d{2} (\d{2}:\d{2}:\d{2}),\d{3} INFO.*summary \+.* (\d+\.\d+)/s Avg: +(\d+)"
+    )
+
+    rpt = await crud.get_by_id(db, report_id)
+    if rpt is None:
+        raise MysteriousException(Codes.REPORT_NOT_EXIST)
+
+    log_path = rpt.jmeter_log_file_path
+    if not log_path or not Path(log_path).exists():
+        return []
+
+    results: list = []
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = _RESULT_RE.search(line)
+                if m:
+                    results.append(
+                        JMeterResultVO(
+                            currentTime=m.group(1),
+                            throughput=float(m.group(2)),
+                            avgResponseTime=float(m.group(3)),
+                        )
+                    )
+    except OSError as e:
+        log.warning("读取 jmeter.log 失败: %s", e)
+        raise MysteriousException(Codes.FAIL, message="实时数据读取失败") from e
+    return results

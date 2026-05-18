@@ -13,6 +13,7 @@ class NodeParam(CamelModel):
     username: str | None = None
     password: str | None = None
     port: int | None = None
+    region: str | None = None
 
 
 class NodeVO(BaseVO):
@@ -24,6 +25,7 @@ class NodeVO(BaseVO):
     password: str = ""
     port: int = 0
     status: int = 0
+    region: str = ""
 
 
 class NodeQuery(BaseQuery):

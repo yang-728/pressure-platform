@@ -17,6 +17,7 @@ from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
 from app.schemas.report import ReportByTestCaseQuery, ReportQuery, ReportVO
+from app.schemas.testcase import JMeterResultVO
 from app.services import report as service
 
 router = APIRouter(
@@ -111,6 +112,20 @@ async def view_report(
 ) -> Response[str]:
     url = await service.view_report(db, id)
     return success(url)
+
+
+@router.get(
+    "/getJMeterResult/{id}",
+    summary="查看指定报告的实时数据",
+    response_model=Response[list[JMeterResultVO]],
+    response_model_by_alias=True,
+)
+async def get_jmeter_result_by_report(
+    id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Response[list[JMeterResultVO]]:
+    items = await service.get_jmeter_result_by_report(db, id)
+    return success(items)
 
 
 @router.get(
