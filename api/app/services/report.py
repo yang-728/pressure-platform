@@ -227,8 +227,114 @@ async def get_jmeter_log(db: AsyncSession, id: int) -> str:
         raise MysteriousException(Codes.FAIL, message="日志读取失败") from e
 
 
+def _find_jtl_file(report_dir: str) -> str | None:
+    """查找 JTL 文件。
+
+    report_dir 运行时指向 data/ 或 jtl/ 子目录，
+    取父目录（timestamp 级别）再找 jtl/ 子目录。
+    """
+    if not report_dir:
+        return None
+    # report_dir 以 /data/ 或 /jtl/ 结尾，取父目录
+    parent = os.path.dirname(report_dir.rstrip(os.sep))
+    jtl_dir = os.path.join(parent, "jtl")
+    if not os.path.isdir(jtl_dir):
+        return None
+    for name in os.listdir(jtl_dir):
+        if name.endswith(".jtl") or name.endswith(".xml"):
+            return os.path.join(jtl_dir, name)
+    return None
+
+
+def _percentile(sorted_values: list[float], p: float) -> float:
+    """计算已排序数组的百分位数。"""
+    if not sorted_values:
+        return 0.0
+    n = len(sorted_values)
+    if n == 1:
+        return sorted_values[0]
+    k = (n - 1) * p / 100.0
+    f = int(k)
+    c = f + 1
+    if c >= n:
+        return sorted_values[-1]
+    return sorted_values[f] + (k - f) * (sorted_values[c] - sorted_values[f])
+
+
+def _parse_jtl_metrics(jtl_path: str, window_sec: int = 5) -> list[dict]:
+    """解析 JTL 文件，按时间窗口聚合指标。"""
+    import csv
+    from datetime import datetime
+
+    window_ms = window_sec * 1000
+    buckets: dict[int, dict] = {}
+
+    try:
+        with open(jtl_path, encoding="utf-8", errors="replace", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    ts = int(row.get("timeStamp", "0"))
+                    elapsed = int(row.get("elapsed", "0"))
+                    success = row.get("success", "true").lower() == "true"
+                    threads = int(row.get("allThreads", "0") or row.get("grpThreads", "0"))
+                except (ValueError, TypeError):
+                    continue
+                if ts <= 0:
+                    continue
+                key = ts // window_ms * window_ms
+                bucket = buckets.setdefault(
+                    key,
+                    {"elapsed": [], "fail": 0, "threads": 0, "count": 0},
+                )
+                bucket["elapsed"].append(elapsed)
+                if not success:
+                    bucket["fail"] += 1
+                bucket["threads"] = threads
+                bucket["count"] += 1
+    except OSError as e:
+        log.warning("读取 JTL 失败: %s", e)
+        return []
+
+    results = []
+    for key in sorted(buckets):
+        b = buckets[key]
+        count = b["count"]
+        if count == 0:
+            continue
+        elapsed_sorted = sorted(b["elapsed"])
+        dt = datetime.fromtimestamp(key / 1000.0)
+        results.append(
+            {
+                "timestamp": dt.strftime("%H:%M:%S"),
+                "qps": round(count / window_sec, 1),
+                "avg_rt": round(sum(elapsed_sorted) / count, 1),
+                "p99_rt": round(_percentile(elapsed_sorted, 99), 1),
+                "error_rate": round(b["fail"] / count * 100, 2),
+                "threads": b["threads"],
+            }
+        )
+    return results
+
+
+async def get_jtl_metrics(
+    db: AsyncSession, report_id: int, window_sec: int = 5
+) -> list[dict]:
+    """读取指定报告 JTL 文件，按窗口聚合返回监控指标。"""
+    rpt = await crud.get_by_id(db, report_id)
+    if rpt is None:
+        raise MysteriousException(Codes.REPORT_NOT_EXIST)
+
+    jtl_path = _find_jtl_file(rpt.report_dir)
+    if not jtl_path:
+        return []
+
+    return _parse_jtl_metrics(jtl_path, window_sec)
+
+
 async def get_jmeter_result_by_report(db: AsyncSession, report_id: int) -> list:
-    """读取指定报告 jmeter.log 的实时 summary 数据。"""
+    """读取指定报告 jmeter.log 的实时 summary 数据。（兼容旧接口）"""
+
     from app.schemas.testcase import JMeterResultVO
     import re
 

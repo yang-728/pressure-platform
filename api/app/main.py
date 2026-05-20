@@ -44,11 +44,14 @@ async def lifespan(app: FastAPI):
     try:
         # 启动定时任务调度器
         from app.services.scheduled_task import start_scheduler, stop_scheduler
+        from app.services.report_cleanup import start_cleanup_scheduler, stop_cleanup_scheduler
         start_scheduler(poll_interval=60)
+        start_cleanup_scheduler()
         yield
     finally:
         log.info("Mysterious API shutting down")
         await stop_scheduler()
+        await stop_cleanup_scheduler()
         await dispose_engine()
         await dispose_redis()
 

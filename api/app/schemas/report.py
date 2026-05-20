@@ -44,3 +44,14 @@ class ReportByTestCaseQuery(BaseQuery):
     name: str | None = None
     test_case_id: int | None = None
     region: str | None = None
+
+
+class MetricsVO(CamelModel):
+    """JMeter 执行监控指标"""
+
+    timestamp: str = ""
+    qps: float = 0.0
+    avg_rt: float = 0.0
+    p99_rt: float = 0.0
+    error_rate: float = 0.0
+    threads: int = 0

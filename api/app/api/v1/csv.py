@@ -6,7 +6,7 @@ import logging
 import os
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Body, Depends, File, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -125,3 +125,18 @@ async def download_csv(id: int, db: AsyncSession = Depends(get_db)) -> FileRespo
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{quote(csv.src_name)}"'},
     )
+
+
+@router.post(
+    "/update/{id}",
+    summary="更新 CSV 文件内容",
+    response_model=Response[bool],
+    response_model_by_alias=True,
+)
+async def update_csv(
+    id: int,
+    content: str = Body(...),
+    db: AsyncSession = Depends(get_db),
+) -> Response[bool]:
+    ok = await service.update_csv_content(db, id, content)
+    return success(ok)

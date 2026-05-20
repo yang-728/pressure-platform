@@ -237,6 +237,30 @@ def _ts_now() -> str:
     return datetime.now(SHANGHAI).strftime("%Y-%m-%d-%H:%M:%S")
 
 
+def _cleanup_old_run_jmx(jmx_dir: str, testcase_id: int, keep: int = 5) -> None:
+    """清理旧的 run_*.jmx 临时文件，只保留最近 keep 个。"""
+    pattern = re.compile(rf"^run_(\d{{4}}-\d{{2}}-\d{{2}}-\d{{2}}:\d{{2}}:\d{{2}})_{testcase_id}\.jmx$")
+    run_files: list[tuple[str, str]] = []  # (filename, ts)
+    try:
+        for name in os.listdir(jmx_dir):
+            m = pattern.match(name)
+            if m:
+                run_files.append((name, m.group(1)))
+    except OSError:
+        return
+    # 按时间戳排序（文件名中时间戳字典序即时间序）
+    run_files.sort(key=lambda x: x[1])
+    # 删除超出的旧文件
+    if len(run_files) > keep:
+        for old_name, _ in run_files[:-keep]:
+            old_path = os.path.join(jmx_dir, old_name)
+            try:
+                os.remove(old_path)
+                log.info("清理旧 run jmx: %s", old_path)
+            except OSError as e:
+                log.warning("删除旧 run jmx 失败: %s, %s", old_path, e)
+
+
 def _prepare_report_dirs(testcase_dir: str, ts: str) -> tuple[str, str, str]:
     report_dir = os.path.join(testcase_dir, "report", ts) + os.sep
     jtl_dir = report_dir + "jtl" + os.sep
@@ -381,6 +405,9 @@ async def run_testcase(db: AsyncSession, id: int, param: RunParam, user: UserCon
         ramp_time,
         duration,
     )
+
+    # 清理旧 run_*.jmx，只保留最近 5 个
+    _cleanup_old_run_jmx(jmx.jmx_dir, id, keep=5)
 
     jtl_dir, log_dir, data_dir = _prepare_report_dirs(testcase.test_case_dir, ts)
     jtl_path = jtl_dir + testcase.name + ".jtl"

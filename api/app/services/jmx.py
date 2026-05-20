@@ -180,6 +180,30 @@ async def get_by_test_case_id(db: AsyncSession, test_case_id: int) -> JmxVO | No
     return _to_vo(obj) if obj else None
 
 
+async def update_jmx_content(db: AsyncSession, id: int, content: str) -> bool:
+    """源码级编辑：把新内容直接写回 JMX 文件（含 debug 副本）。"""
+    obj = await jmx_crud.get_by_id(db, id)
+    if obj is None:
+        raise MysteriousException(Codes.FILE_NOT_EXIST)
+
+    filepath = os.path.join(obj.jmx_dir, obj.dst_name)
+    async with aiofiles.open(filepath, "w", encoding="utf-8") as f:
+        await f.write(content)
+
+    # 同步更新 debug 副本，保持内容一致
+    debug_path = os.path.join(obj.jmx_dir, "debug_" + obj.dst_name)
+    if os.path.exists(debug_path):
+        async with aiofiles.open(debug_path, "w", encoding="utf-8") as f:
+            await f.write(content)
+        # 重新压低线程数
+        try:
+            update_debug_thread(debug_path)
+        except Exception:
+            log.warning("debug 副本压低线程参数失败: %s", debug_path, exc_info=True)
+
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Phase 4 — 在线编辑（addOnline / getOnline / updateOnline / forceDelete）
 # ---------------------------------------------------------------------------

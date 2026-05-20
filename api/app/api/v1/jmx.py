@@ -6,7 +6,7 @@ import logging
 import os
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Body, Depends, File, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -93,6 +93,21 @@ async def view_jmx(id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
 async def download_jmx(id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     jmx = await service.get_jmx_vo(db, id)
     return _file_response_for_jmx(jmx.jmx_dir, jmx.src_name)
+
+
+@router.post(
+    "/updateContent/{id}",
+    summary="源码级编辑 JMX",
+    response_model=Response[bool],
+    response_model_by_alias=True,
+)
+async def update_jmx_content(
+    id: int,
+    content: str = Body(...),
+    db: AsyncSession = Depends(get_db),
+) -> Response[bool]:
+    ok = await service.update_jmx_content(db, id, content)
+    return success(ok)
 
 
 # ---------------------------------------------------------------------------

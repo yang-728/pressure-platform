@@ -35,20 +35,6 @@ services:
     command: >
       bash -c "echo 'vm.overcommit_memory = 1' >> /etc/sysctl.conf && redis-server /etc/redis/redis.conf"
 
-  mysterious-nginx:
-    container_name: mysterious-nginx
-    image: 100zz/test-nginx:${NGINX_VERSION}
-    restart: always
-    environment:
-      TZ: Asia/Shanghai
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d
-      - ./nginx/html:/usr/share/nginx/html
-      - ./mysterious-data:/opt/mysterious/mysterious-data
-    ports:
-      - "1234:1234"
-      - "9998:9998"
-
   mysterious:
     container_name: mysterious
     image: 100zz/mysterious:${MYSTERIOUS_VERSION}
@@ -69,5 +55,4 @@ services:
       - "4321:4321"
     depends_on:
       - mysterious-mysql
-      - mysterious-nginx
       - mysterious-redis

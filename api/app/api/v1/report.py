@@ -16,7 +16,7 @@ from app.core.exceptions import MysteriousException
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
-from app.schemas.report import ReportByTestCaseQuery, ReportQuery, ReportVO
+from app.schemas.report import MetricsVO, ReportByTestCaseQuery, ReportQuery, ReportVO
 from app.schemas.testcase import JMeterResultVO
 from app.services import report as service
 
@@ -115,8 +115,23 @@ async def view_report(
 
 
 @router.get(
+    "/getMetrics/{id}",
+    summary="查看指定报告的 JTL 指标（QPS/RT/错误率/线程数）",
+    response_model=Response[list[MetricsVO]],
+    response_model_by_alias=True,
+)
+async def get_metrics(
+    id: int,
+    window: int = 5,
+    db: AsyncSession = Depends(get_db),
+) -> Response[list[MetricsVO]]:
+    items = await service.get_jtl_metrics(db, id, window)
+    return success(items)
+
+
+@router.get(
     "/getJMeterResult/{id}",
-    summary="查看指定报告的实时数据",
+    summary="查看指定报告的实时数据（兼容旧接口）",
     response_model=Response[list[JMeterResultVO]],
     response_model_by_alias=True,
 )

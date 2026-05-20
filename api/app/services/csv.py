@@ -145,3 +145,18 @@ async def get_csv_vo(db: AsyncSession, id: int) -> CsvVO:
     if obj is None:
         raise MysteriousException(Codes.FILE_NOT_EXIST)
     return _to_vo(obj)
+
+
+async def update_csv_content(db: AsyncSession, id: int, content: str) -> bool:
+    """把新内容写回 CSV 文件并同步到 slave 节点。"""
+    obj = await csv_crud.get_by_id(db, id)
+    if obj is None:
+        raise MysteriousException(Codes.FILE_NOT_EXIST)
+
+    filepath = obj.csv_dir + obj.dst_name
+    async with aiofiles.open(filepath, "w", encoding="utf-8", newline="") as f:
+        await f.write(content)
+
+    # 同步到所有 enabled slave
+    await node_service.scp_to_enabled_slaves(db, filepath, obj.csv_dir)
+    return True
