@@ -152,6 +152,36 @@ async def test_run_no_slaves_no_R_flag(
 
 
 @pytest.mark.asyncio
+async def test_run_with_region_without_healthy_slave_does_not_create_report(
+    auth_client: AsyncClient,
+    data_home: Path,
+    jmeter_bin_home: Path,
+    sample_jmx_bytes: bytes,
+    db: AsyncSession,
+) -> None:
+    case_id = await _create_case_with_jmx(auth_client, "r_region_no_slave", sample_jmx_bytes)
+    resp = await auth_client.post(
+        f"/testcase/run/{case_id}",
+        json={
+            "numThreads": "10",
+            "rampTime": "0",
+            "duration": "60",
+            "slaveCount": 1,
+            "region": "长沙",
+        },
+    )
+
+    body = resp.json()
+    assert body["code"] == -1
+    assert "暂无可用压力机" in body["message"]
+
+    reports = (
+        await db.execute(select(Report).where(Report.test_case_id == case_id))
+    ).scalars().all()
+    assert reports == []
+
+
+@pytest.mark.asyncio
 async def test_run_with_slaves_adds_R_flag(
     auth_client: AsyncClient,
     data_home: Path,

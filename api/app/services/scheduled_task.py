@@ -266,7 +266,6 @@ async def _execute_scheduled(db: AsyncSession, task: ScheduledTask) -> None:
         if tc is None or tc.status == TestCaseStatus.RUN_ING.value:
             log.warning("Scheduler: skip task %d (testcase %d status=%s)",
                         task.id, task.test_case_id, tc.status if tc else "deleted")
-            await _trigger_next_run(db, task)
             return
 
         # 区域可用性检查：指定了区域但无健康 slave 时跳过
@@ -280,7 +279,6 @@ async def _execute_scheduled(db: AsyncSession, task: ScheduledTask) -> None:
                     "Scheduler: skip task %d (testcase=%d) — region '%s' has no healthy slaves",
                     task.id, task.test_case_id, region,
                 )
-                await _trigger_next_run(db, task)
                 return
 
         from app.services.testcase import run_testcase

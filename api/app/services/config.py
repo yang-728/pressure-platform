@@ -91,6 +91,11 @@ async def get_value(db: AsyncSession, key: str) -> str:
     return value
 
 
+async def get_value_or_default(db: AsyncSession, key: str, default: str = "") -> str:
+    value = await crud.get_value(db, key)
+    return value if value not in (None, "") else default
+
+
 async def get_options(db: AsyncSession, type: str) -> list[str]:
     """获取指定类型的选项列表（biz/service/version）。
 

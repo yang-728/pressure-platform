@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
+from pydantic import field_serializer
+
+from app.schemas.base import _fmt_dt
 from app.schemas.base import BaseQuery, BaseVO, CamelModel
 
 
@@ -55,6 +60,18 @@ class MetricsVO(CamelModel):
     p99_rt: float = 0.0
     error_rate: float = 0.0
     threads: int = 0
+
+
+class ArtifactVO(CamelModel):
+    """报告产物文件信息。"""
+
+    name: str = ""
+    size: int = 0
+    modify_time: datetime | None = None
+
+    @field_serializer("modify_time", when_used="json")
+    def _ser_modify_time(self, v: datetime | None) -> str | None:
+        return _fmt_dt(v)
 
 
 class CompareVO(CamelModel):

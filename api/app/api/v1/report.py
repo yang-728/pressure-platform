@@ -18,7 +18,7 @@ from app.core.exceptions import MysteriousException
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
-from app.schemas.report import CompareVO, MetricsVO, ReportByTestCaseQuery, ReportQuery, ReportVO
+from app.schemas.report import ArtifactVO, CompareVO, MetricsVO, ReportByTestCaseQuery, ReportQuery, ReportVO
 from app.schemas.testcase import JMeterResultVO
 from app.services import report as service
 
@@ -117,6 +117,52 @@ async def view_report(
 ) -> Response[str]:
     url = await service.view_report(db, id)
     return success(url)
+
+
+@router.get(
+    "/grafana/{id}",
+    summary="获取 Grafana 资源监控跳转地址",
+    response_model=Response[str],
+    response_model_by_alias=True,
+)
+async def grafana_url(
+    id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Response[str]:
+    url = await service.get_grafana_url(db, id)
+    return success(url)
+
+
+@router.get(
+    "/artifacts/{id}",
+    summary="查看报告产物文件列表",
+    response_model=Response[list[ArtifactVO]],
+    response_model_by_alias=True,
+)
+async def list_artifacts(
+    id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Response[list[ArtifactVO]]:
+    items = await service.list_artifacts(db, id)
+    return success(items)
+
+
+@router.get(
+    "/artifacts/{id}/download",
+    summary="下载报告产物文件",
+)
+async def download_artifact(
+    id: int,
+    name: str,
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    path = await service.download_artifact(db, id, name)
+    filename = os.path.basename(path)
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{quote(filename)}"'},
+    )
 
 
 @router.get(

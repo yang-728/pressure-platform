@@ -8,6 +8,7 @@ Phase 5 把 debug / run / stop / syncNode / getFull / getJMeterResult 一起补�
 from __future__ import annotations
 
 import logging
+import json
 import math
 import os
 import re
@@ -60,6 +61,7 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 # 用例目录根，Java 对应配置 key 是 MASTER_DATA_HOME
 DATA_HOME_KEY = "MASTER_DATA_HOME"
 MASTER_JMETER_BIN_HOME_KEY = "MASTER_JMETER_BIN_HOME"
+INIT_ARTIFACT_TESTCASE_IDS_KEY = "INIT_ARTIFACT_TESTCASE_IDS"
 
 # Java 端 addTestCase 校验：name 不能含空格或 #
 _BAD_NAME_CHARS = re.compile(r"[\s#]")
@@ -272,6 +274,45 @@ def _prepare_report_dirs(testcase_dir: str, ts: str) -> tuple[str, str, str]:
     return jtl_dir, log_dir, data_dir
 
 
+def _write_run_meta(
+    data_dir: str,
+    *,
+    total_threads: int,
+    slave_count: int,
+    per_slave_threads: int,
+) -> None:
+    """记录本次执行的线程快照，供实时曲线把单机 JTL 线程数换算为总线程数。"""
+    report_root = Path(data_dir).resolve().parent
+    meta_path = report_root / "run_meta.json"
+    payload = {
+        "total_threads": total_threads,
+        "slave_count": slave_count,
+        "per_slave_threads": per_slave_threads,
+    }
+    try:
+        meta_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        log.warning("写入运行元数据失败: %s, %s", meta_path, e)
+
+
+def _parse_id_set(raw: str) -> set[int]:
+    ids: set[int] = set()
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            ids.add(int(item))
+        except ValueError:
+            log.warning("忽略非法初始化用例ID配置: %s", item)
+    return ids
+
+
+async def _is_init_artifact_testcase(db: AsyncSession, testcase_id: int) -> bool:
+    raw = await config_service.get_value_or_default(db, INIT_ARTIFACT_TESTCASE_IDS_KEY, "")
+    return testcase_id in _parse_id_set(raw)
+
+
 async def debug_testcase(db: AsyncSession, id: int, user: UserContext) -> bool:
     bin_home = await _ensure_master_bin(db, "debug")
     testcase = await crud.get_by_id(db, id)
@@ -346,56 +387,70 @@ async def run_testcase(db: AsyncSession, id: int, param: RunParam, user: UserCon
     if testcase.status == TestCaseStatus.RUN_ING.value:
         raise MysteriousException(Codes.TESTCASE_IS_RUNNING)
 
+    is_init_artifact = await _is_init_artifact_testcase(db, id)
+
     # 获取启用 slave，可选按区域过滤
     region = param.region.strip() if param.region else ""
 
     # 同用例+同区域互斥：该区域已在跑则拒绝
-    if region:
+    if region and not is_init_artifact:
         region_running = await report_crud.get_running_by_testcase_region(db, id, region)
         if region_running:
             raise MysteriousException(
                 Codes.TESTCASE_IS_RUNNING,
                 message=f"用例「{testcase.name}」在区域「{region}」已有正在执行的任务",
             )
-    enable_slaves = await node_crud.list_enable_slaves(db, region=region or None)
+    if is_init_artifact:
+        healthy_slaves = []
+        log.info("初始化产物用例 %s 使用 master 本机执行，不分配压力机", id)
+    else:
+        enable_slaves = await node_crud.list_enable_slaves(db, region=region or None)
 
-    # 过滤掉离线的 slave
-    healthy_slaves = [s for s in enable_slaves if s.health_status == 1]
+        # 过滤掉离线的 slave
+        healthy_slaves = [s for s in enable_slaves if s.health_status == 1]
 
-    # 用户可选择使用多少台 slave
-    total_available = len(healthy_slaves)
-    if param.slave_count > total_available:
-        raise MysteriousException(
-            Codes.FAIL,
-            message=f"压测机数量不足: 需要{param.slave_count}台, 可用{total_available}台",
-        )
-    if param.slave_count > 0 and param.slave_count <= total_available:
-        healthy_slaves = healthy_slaves[:param.slave_count]
-        region_info = f"区域={region}, " if region else ""
-        log.info("%s用户指定使用 %d/%d 台 slave", region_info, param.slave_count, total_available)
+        # 用户可选择使用多少台 slave
+        total_available = len(healthy_slaves)
+        if region and total_available < 1:
+            raise MysteriousException(
+                Codes.FAIL,
+                message=f"区域「{region}」暂无可用压力机，无法执行",
+            )
+        if param.slave_count > total_available:
+            raise MysteriousException(
+                Codes.FAIL,
+                message=f"压测机数量不足: 需要{param.slave_count}台, 可用{total_available}台",
+            )
+        if param.slave_count > 0 and param.slave_count <= total_available:
+            healthy_slaves = healthy_slaves[:param.slave_count]
+            region_info = f"区域={region}, " if region else ""
+            log.info("%s用户指定使用 %d/%d 台 slave", region_info, param.slave_count, total_available)
 
-    for s in healthy_slaves:
-        try:
-            ssh = SSHClient(s.host, s.port, s.username, s.password)
-            await ssh.telnet(200)
-        except MysteriousException as e:
-            log.info("run 前置检查 slave %s 失败: %s", s.host, e)
-            raise MysteriousException(Codes.NODE_CANNOT_CONNECT) from e
+        for s in healthy_slaves:
+            try:
+                ssh = SSHClient(s.host, s.port, s.username, s.password)
+                await ssh.telnet(200)
+            except MysteriousException as e:
+                log.info("run 前置检查 slave %s 失败: %s", s.host, e)
+                raise MysteriousException(Codes.NODE_CANNOT_CONNECT) from e
 
     # 压测参数优先使用传入值，否则回退到用例自身保存的值
     num_threads = param.num_threads if param.num_threads not in (None, "") else (testcase.num_threads or "10")
     ramp_time = param.ramp_time if param.ramp_time not in (None, "") else (testcase.ramp_time or "0")
     duration = param.duration if param.duration not in (None, "") else (testcase.duration or "60")
+    total_threads = int(num_threads)
 
     # 分布式执行：总并发数按 slave 数均分，每台只执行自己的份额
     slave_count = len(healthy_slaves)
+    per_slave_threads = total_threads
     if slave_count > 1:
-        per_slave = math.ceil(int(num_threads) / slave_count)
+        per_slave = math.ceil(total_threads / slave_count)
         log.info(
             "分布式执行: 总并发=%s, slave数=%d, 每台=%d",
-            num_threads, slave_count, per_slave,
+            total_threads, slave_count, per_slave,
         )
-        num_threads = str(per_slave)
+        per_slave_threads = per_slave
+        num_threads = str(per_slave_threads)
 
     # 根据用户传入的参数动态修改 JMX，生成临时执行文件
     src_jmx_path = jmx.jmx_dir + jmx.dst_name
@@ -416,6 +471,15 @@ async def run_testcase(db: AsyncSession, id: int, param: RunParam, user: UserCon
     jtl_dir, log_dir, data_dir = _prepare_report_dirs(testcase.test_case_dir, ts)
     jtl_path = jtl_dir + testcase.name + ".jtl"
     log_path = log_dir + f"jmeter_{ts}.log"
+    artifact_dir = str(Path(data_dir).resolve().parent / "artifacts")
+    if is_init_artifact:
+        Path(artifact_dir).mkdir(parents=True, exist_ok=True)
+    _write_run_meta(
+        data_dir,
+        total_threads=total_threads,
+        slave_count=max(1, slave_count),
+        per_slave_threads=per_slave_threads,
+    )
 
     cmd = [
         os.path.join(bin_home, "jmeter"),
@@ -425,6 +489,8 @@ async def run_testcase(db: AsyncSession, id: int, param: RunParam, user: UserCon
     ]
     if healthy_slaves:
         cmd += ["-R", ",".join(f"{s.host}:1099" for s in healthy_slaves)]
+    if is_init_artifact:
+        cmd.append(f"-JartifactDir={artifact_dir}")
     cmd += [
         "-l",
         jtl_path,

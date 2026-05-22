@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from httpx import AsyncClient
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.enums import ExecType
 from app.models.config import Config
 from app.models.report import Report
+from app.models.testcase import TestCase
+from app.services.report import _parse_jtl_metrics
 
 
 async def _insert_report(
@@ -168,3 +171,87 @@ async def test_view_report_success(auth_client: AsyncClient, db: AsyncSession, t
     resp = await auth_client.get(f"/report/view/{rid}")
     assert resp.json()["code"] == 0
     assert resp.json()["data"].endswith("/index.html")
+
+
+@pytest.mark.asyncio
+async def test_grafana_url_uses_dashboard_template_and_service_instance(
+    auth_client: AsyncClient,
+    db: AsyncSession,
+) -> None:
+    db.add(TestCase(id=10, name="case-1", service="EMM-API"))
+    db.add(
+        Config(
+            config_key="GRAFANA_DASHBOARD_URL",
+            config_value=(
+                "http://10.10.27.210:3000/d/StarsL-TenSunS-node/0d50bf8"
+                "?var-interval=3m&orgId=1&from=now-30m&to=now"
+                "&var-instance=10.10.27.42:9200&refresh=1m"
+            ),
+            description="grafana url",
+        )
+    )
+    db.add(
+        Config(
+            config_key="GRAFANA_INSTANCE_MAP",
+            config_value='{"EMM-API":"10.10.27.42:9200"}',
+            description="service instance map",
+        )
+    )
+    await db.commit()
+
+    rid = await _insert_report(db, name="rpt", test_case_id=10, exec_type=ExecType.EXEC.value)
+    resp = await auth_client.get(f"/report/grafana/{rid}")
+
+    assert resp.json()["code"] == 0
+    url = resp.json()["data"]
+    parts = urlsplit(url)
+    query = parse_qs(parts.query)
+    assert parts.netloc == "10.10.27.210:3000"
+    assert query["var-instance"] == ["10.10.27.42:9200"]
+    assert query["orgId"] == ["1"]
+    assert query["refresh"] == ["1m"]
+    assert query["from"][0].isdigit()
+    assert query["to"][0].isdigit()
+    assert "var-region" not in query
+
+
+def test_parse_jtl_metrics_converts_distributed_threads_to_total(tmp_path) -> None:
+    jtl = tmp_path / "result.jtl"
+    jtl.write_text(
+        "\n".join(
+            [
+                "timeStamp,elapsed,success,allThreads,grpThreads",
+                "1700000000000,100,true,15,15",
+                "1700000001000,120,true,15,15",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    items = _parse_jtl_metrics(
+        str(jtl),
+        5,
+        {"total_threads": 30, "slave_count": 2, "per_slave_threads": 15},
+    )
+
+    assert len(items) == 1
+    assert items[0]["threads"] == 30
+
+
+def test_parse_jtl_metrics_keeps_single_machine_threads(tmp_path) -> None:
+    jtl = tmp_path / "result.jtl"
+    jtl.write_text(
+        "\n".join(
+            [
+                "timeStamp,elapsed,success,allThreads,grpThreads",
+                "1700000000000,100,true,10,10",
+                "1700000001000,120,true,15,15",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    items = _parse_jtl_metrics(str(jtl), 5)
+
+    assert len(items) == 1
+    assert items[0]["threads"] == 15

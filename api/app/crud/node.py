@@ -9,6 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.node import Node
 
 
+def _region_matches(node_region: str | None, region: str) -> bool:
+    """节点 region 可能是逗号分隔列表；筛选时必须按区域 token 精确匹配。"""
+    target = region.strip()
+    if not target:
+        return True
+    return target in {r.strip() for r in (node_region or "").split(",") if r.strip()}
+
+
 async def get_by_id(db: AsyncSession, id: int) -> Node | None:
     return await db.get(Node, id)
 
@@ -77,9 +85,10 @@ async def list_enable_slaves(
         Node.type == NodeType.SLAVE.value,
         Node.status == NodeStatus.ENABLE.value,
     )
+    nodes = list((await db.execute(stmt)).scalars().all())
     if region:
-        stmt = stmt.where(Node.region.like(f"%{region}%"))
-    return list((await db.execute(stmt)).scalars().all())
+        nodes = [node for node in nodes if _region_matches(node.region, region)]
+    return nodes
 
 
 async def get_all_regions(db: AsyncSession) -> list[str]:

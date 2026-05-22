@@ -141,6 +141,41 @@ async def test_list_nodes_password_masked(auth_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_enable_slave_count_region_matches_exact_token(
+    auth_client: AsyncClient,
+    db: AsyncSession,
+) -> None:
+    db.add(
+        Node(
+            name="n1",
+            type=NodeType.SLAVE.value,
+            host="10.0.5.1",
+            username="u",
+            port=22,
+            status=NodeStatus.ENABLE.value,
+            health_status=1,
+            region="长沙-备份",
+        )
+    )
+    db.add(
+        Node(
+            name="n2",
+            type=NodeType.SLAVE.value,
+            host="10.0.5.2",
+            username="u",
+            port=22,
+            status=NodeStatus.ENABLE.value,
+            health_status=1,
+            region="深圳,长沙",
+        )
+    )
+    await db.commit()
+
+    resp = await auth_client.get("/node/enableSlaveCount?region=长沙")
+    assert resp.json()["data"] == 1
+
+
+@pytest.mark.asyncio
 async def test_delete_node(auth_client: AsyncClient) -> None:
     add_resp = await auth_client.post(
         "/node/add",

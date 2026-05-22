@@ -5,11 +5,15 @@ Phase 6 补齐 download / clean / view。
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,12 +23,13 @@ from app.core.context import UserContext
 from app.core.enums import ExecType
 from app.core.exceptions import MysteriousException
 from app.core.response import PageVO
-from app.crud import report as crud
+from app.crud import report as crud, testcase as testcase_crud
 from app.models.report import Report
-from app.schemas.report import ReportByTestCaseQuery, ReportParam, ReportQuery, ReportVO
+from app.schemas.report import ArtifactVO, ReportByTestCaseQuery, ReportParam, ReportQuery, ReportVO
 from app.services import config as config_service
 
 log = logging.getLogger(__name__)
+SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 def _to_vo(obj: Report) -> ReportVO:
@@ -209,6 +214,98 @@ async def view_report(db: AsyncSession, id: int) -> str:
     return f"http://{host}/reports{relative}index.html"
 
 
+def _to_epoch_ms(dt: datetime | None) -> int:
+    if dt is None:
+        dt = datetime.now(SHANGHAI)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=SHANGHAI)
+    return int(dt.timestamp() * 1000)
+
+
+def _parse_offset_minutes(raw: str, default: int) -> int:
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _join_url(base_url: str, dashboard_path: str) -> str:
+    return f"{base_url.rstrip('/')}/{dashboard_path.lstrip('/')}"
+
+
+def _parse_instance_map(raw: str) -> dict[str, str]:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items() if k and v}
+
+
+async def _resolve_grafana_instance(db: AsyncSession, report: Report) -> str:
+    """按用例服务名解析 Grafana instance，例如 EMM-API -> 10.10.27.42:9200。"""
+    mapping = _parse_instance_map(
+        await config_service.get_value_or_default(db, "GRAFANA_INSTANCE_MAP", "")
+    )
+    testcase = await testcase_crud.get_by_id(db, report.test_case_id)
+    candidates = [
+        testcase.service if testcase else "",
+        testcase.name if testcase else "",
+        report.name,
+    ]
+    for key in candidates:
+        if key and key in mapping:
+            return mapping[key]
+    return await config_service.get_value_or_default(db, "GRAFANA_DEFAULT_INSTANCE", "")
+
+
+async def get_grafana_url(db: AsyncSession, id: int) -> str:
+    """根据报告时间窗口和服务实例生成 Grafana 资源监控跳转地址。"""
+    report = await crud.get_by_id(db, id)
+    if report is None:
+        raise MysteriousException(Codes.REPORT_NOT_EXIST)
+
+    url = await config_service.get_value_or_default(db, "GRAFANA_DASHBOARD_URL", "")
+    if not url:
+        base_url = await config_service.get_value(db, "GRAFANA_BASE_URL")
+        dashboard_path = await config_service.get_value(db, "GRAFANA_DASHBOARD_PATH")
+        url = _join_url(base_url, dashboard_path)
+
+    org_id = await config_service.get_value_or_default(db, "GRAFANA_ORG_ID", "")
+    instance_var = await config_service.get_value_or_default(db, "GRAFANA_INSTANCE_VAR", "instance")
+    instance = await _resolve_grafana_instance(db, report)
+    from_offset = _parse_offset_minutes(
+        await config_service.get_value_or_default(db, "GRAFANA_FROM_OFFSET_MINUTES", "5"),
+        5,
+    )
+    to_offset = _parse_offset_minutes(
+        await config_service.get_value_or_default(db, "GRAFANA_TO_OFFSET_MINUTES", "5"),
+        5,
+    )
+
+    start = report.create_time
+    end = report.modify_time or report.create_time
+    if start and end and end < start:
+        end = start
+
+    params = {
+        "from": str(_to_epoch_ms(start - timedelta(minutes=from_offset) if start else None)),
+        "to": str(_to_epoch_ms(end + timedelta(minutes=to_offset) if end else None)),
+    }
+    if org_id:
+        params["orgId"] = org_id
+    if instance:
+        params[f"var-{instance_var}"] = instance
+
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query.update(params)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 async def get_jmeter_log(db: AsyncSession, id: int) -> str:
     """返回报告的 jmeter.log 文件内容。"""
     report = await crud.get_by_id(db, id)
@@ -246,6 +343,108 @@ def _find_jtl_file(report_dir: str) -> str | None:
     return None
 
 
+def _find_report_root(report_dir: str) -> str | None:
+    if not report_dir:
+        return None
+    return os.path.dirname(report_dir.rstrip(os.sep))
+
+
+def _artifact_dir(report_dir: str) -> str | None:
+    report_root = _find_report_root(report_dir)
+    if not report_root:
+        return None
+    return os.path.join(report_root, "artifacts")
+
+
+def _safe_artifact_path(report_dir: str, name: str) -> str:
+    if not name or Path(name).name != name:
+        raise MysteriousException(Codes.PARAM_WRONG, message="产物文件名不合法")
+
+    artifact_dir = _artifact_dir(report_dir)
+    if not artifact_dir:
+        raise MysteriousException(Codes.REPORT_DIR_NOT_EXIST)
+
+    root = Path(artifact_dir).resolve()
+    path = (root / name).resolve()
+    if path.parent != root:
+        raise MysteriousException(Codes.PARAM_WRONG, message="产物文件名不合法")
+    return str(path)
+
+
+async def list_artifacts(db: AsyncSession, id: int) -> list[ArtifactVO]:
+    report = await crud.get_by_id(db, id)
+    if report is None:
+        raise MysteriousException(Codes.REPORT_NOT_EXIST)
+
+    artifact_dir = _artifact_dir(report.report_dir)
+    if not artifact_dir or not os.path.isdir(artifact_dir):
+        return []
+
+    items: list[ArtifactVO] = []
+    for path in sorted(Path(artifact_dir).iterdir(), key=lambda p: p.name):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        items.append(
+            ArtifactVO(
+                name=path.name,
+                size=stat.st_size,
+                modify_time=datetime.fromtimestamp(stat.st_mtime),
+            )
+        )
+    return items
+
+
+async def download_artifact(db: AsyncSession, id: int, name: str) -> str:
+    report = await crud.get_by_id(db, id)
+    if report is None:
+        raise MysteriousException(Codes.REPORT_NOT_EXIST)
+
+    path = _safe_artifact_path(report.report_dir, name)
+    if not os.path.isfile(path):
+        raise MysteriousException(Codes.FILE_NOT_EXIST)
+    return path
+
+
+def _load_run_meta(report_dir: str) -> dict:
+    report_root = _find_report_root(report_dir)
+    if not report_root:
+        return {}
+    meta_path = os.path.join(report_root, "run_meta.json")
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _meta_int(meta: dict, key: str, default: int = 0) -> int:
+    try:
+        return int(meta.get(key) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_threads(raw_threads: int, run_meta: dict | None) -> int:
+    """分布式 JTL 的 allThreads 通常是单台压力机线程数，这里换算成总线程数。"""
+    if not run_meta:
+        return raw_threads
+    slave_count = _meta_int(run_meta, "slave_count", 1)
+    per_slave_threads = _meta_int(run_meta, "per_slave_threads", 0)
+    total_threads = _meta_int(run_meta, "total_threads", 0)
+    if slave_count <= 1:
+        return raw_threads
+
+    # 如果 JTL 已经给出全局线程数，不再重复乘；否则按实际压力机数换算。
+    threads = raw_threads
+    if per_slave_threads <= 0 or raw_threads <= per_slave_threads:
+        threads = raw_threads * slave_count
+    if total_threads > 0:
+        threads = min(threads, total_threads)
+    return threads
+
+
 def _percentile(sorted_values: list[float], p: float) -> float:
     """计算已排序数组的百分位数。"""
     if not sorted_values:
@@ -261,7 +460,11 @@ def _percentile(sorted_values: list[float], p: float) -> float:
     return sorted_values[f] + (k - f) * (sorted_values[c] - sorted_values[f])
 
 
-def _parse_jtl_metrics(jtl_path: str, window_sec: int = 5) -> list[dict]:
+def _parse_jtl_metrics(
+    jtl_path: str,
+    window_sec: int = 5,
+    run_meta: dict | None = None,
+) -> list[dict]:
     """解析 JTL 文件，按时间窗口聚合指标。"""
     import csv
     from datetime import datetime
@@ -277,7 +480,8 @@ def _parse_jtl_metrics(jtl_path: str, window_sec: int = 5) -> list[dict]:
                     ts = int(row.get("timeStamp", "0"))
                     elapsed = int(row.get("elapsed", "0"))
                     success = row.get("success", "true").lower() == "true"
-                    threads = int(row.get("allThreads", "0") or row.get("grpThreads", "0"))
+                    raw_threads = int(row.get("allThreads", "0") or row.get("grpThreads", "0"))
+                    threads = _normalize_threads(raw_threads, run_meta)
                 except (ValueError, TypeError):
                     continue
                 if ts <= 0:
@@ -290,7 +494,7 @@ def _parse_jtl_metrics(jtl_path: str, window_sec: int = 5) -> list[dict]:
                 bucket["elapsed"].append(elapsed)
                 if not success:
                     bucket["fail"] += 1
-                bucket["threads"] = threads
+                bucket["threads"] = max(bucket["threads"], threads)
                 bucket["count"] += 1
     except OSError as e:
         log.warning("读取 JTL 失败: %s", e)
@@ -329,7 +533,7 @@ async def get_jtl_metrics(
     if not jtl_path:
         return []
 
-    return _parse_jtl_metrics(jtl_path, window_sec)
+    return _parse_jtl_metrics(jtl_path, window_sec, _load_run_meta(rpt.report_dir))
 
 
 def _normalize_to_relative(items: list[dict]) -> list[dict]:
