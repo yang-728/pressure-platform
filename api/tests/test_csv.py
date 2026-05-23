@@ -68,6 +68,7 @@ async def test_upload_csv_not_in_jmx(
     files = {"csvFile": ("other.csv", b"a,b,c\n", "text/csv")}
     resp = await auth_client.post(f"/csv/upload/{case_id}", files=files)
     assert resp.json()["code"] == 1015  # CSV_NAME_ERROR
+    assert "未引用参数化文件" in resp.json()["message"]
 
 
 @pytest.mark.asyncio

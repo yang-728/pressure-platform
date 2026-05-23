@@ -28,7 +28,8 @@ log = logging.getLogger(__name__)
 
 
 def _check_csv_name(name: str | None) -> None:
-    if not name or " " in name or not (name.endswith(".csv") or name.endswith(".dat")):
+    lower_name = (name or "").lower()
+    if not name or " " in name or not (lower_name.endswith(".csv") or lower_name.endswith(".dat")):
         raise MysteriousException(Codes.CSV_NAME_ERROR)
 
 
@@ -67,7 +68,10 @@ async def upload_csv(
     if jmx.jmeter_script_type == JMeterScript.UPLOAD_JMX.value:
         if not jmeter_xml.exist_csv_filename(jmx_filepath, src_name):
             log.warning("JMX %s 里没有 testname=%s 的 CSVDataSet 节点", jmx_filepath, src_name)
-            raise MysteriousException(Codes.CSV_NAME_ERROR)
+            raise MysteriousException(
+                Codes.CSV_NAME_ERROR,
+                message=f"JMX脚本中未引用参数化文件「{src_name}」，请先在CSV Data Set中配置同名文件",
+            )
 
     # 5. 已存在判存
     existing = await csv_crud.get_exist_list(db, testcase_id, src_name, csv_dir)

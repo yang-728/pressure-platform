@@ -48,6 +48,7 @@ from app.schemas.testcase import (
     TestCaseFullVO,
     TestCaseParam,
     TestCaseQuery,
+    TestCaseStatsVO,
     TestCaseVO,
 )
 from app.services import config as config_service
@@ -204,6 +205,21 @@ async def get_testcase_list(
     )
     page_vo.list = [_to_vo(t) for t in items]
     return page_vo
+
+
+async def get_testcase_stats(db: AsyncSession, query: TestCaseQuery) -> TestCaseStatsVO:
+    counts = await crud.count_by_status(
+        db, id=query.id, name=query.name, biz=query.biz, service=query.service
+    )
+    return TestCaseStatsVO(
+        total=sum(counts.values()),
+        idle=counts.get(TestCaseStatus.NOT_RUN.value, 0),
+        running=counts.get(TestCaseStatus.RUN_ING.value, 0),
+        success=counts.get(TestCaseStatus.RUN_SUCCESS.value, 0),
+        failed=counts.get(TestCaseStatus.RUN_FAILED.value, 0),
+        waiting=counts.get(TestCaseStatus.RUN_WAITING.value, 0),
+        canceled=counts.get(TestCaseStatus.WAIT_CANCEL.value, 0),
+    )
 
 
 # ----- Phase 3+ 提供的轻量级关联查询辅助 -----

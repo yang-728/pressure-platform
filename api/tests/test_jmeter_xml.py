@@ -131,6 +131,24 @@ def test_update_csv_filename_changes_filepath(tmp_path: Path) -> None:
     assert filenames == [new_path]
 
 
+def test_csv_filename_matches_windows_path_basename(tmp_path: Path) -> None:
+    jmx = tmp_path / "windows_csv_path.jmx"
+    jmx.write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan>
+  <hashTree>
+    <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="csv data" enabled="true">
+      <stringProp name="filename">D:\\sessionId_data.dat</stringProp>
+    </CSVDataSet>
+  </hashTree>
+</jmeterTestPlan>
+""",
+        encoding="utf-8",
+    )
+
+    assert jmeter_xml.exist_csv_filename(str(jmx), "sessionId_data.dat") is True
+
+
 def test_update_jar_classpath_changes_testplan(tmp_path: Path) -> None:
     jmx = _copy_sample(tmp_path)
     new_path = "/data/users/case_a/jar"

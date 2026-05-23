@@ -119,6 +119,31 @@ async def test_list_testcases_search_by_id_exact(
 
 
 @pytest.mark.asyncio
+async def test_testcase_stats_counts_all_matching_rows(
+    auth_client: AsyncClient, db: AsyncSession, data_home: Path
+) -> None:
+    rows = [
+        TestCase(name="stat_api_idle", service="api", status=TestCaseStatus.NOT_RUN.value, test_case_dir=str(data_home / "a")),
+        TestCase(name="stat_api_running", service="api", status=TestCaseStatus.RUN_ING.value, test_case_dir=str(data_home / "b")),
+        TestCase(name="stat_api_success", service="api", status=TestCaseStatus.RUN_SUCCESS.value, test_case_dir=str(data_home / "c")),
+        TestCase(name="stat_api_failed", service="api", status=TestCaseStatus.RUN_FAILED.value, test_case_dir=str(data_home / "d")),
+        TestCase(name="stat_core_idle", service="core", status=TestCaseStatus.NOT_RUN.value, test_case_dir=str(data_home / "e")),
+    ]
+    db.add_all(rows)
+    await db.commit()
+
+    resp = await auth_client.get("/testcase/stats?name=stat_&service=api")
+
+    assert resp.json()["code"] == 0
+    data = resp.json()["data"]
+    assert data["total"] == 4
+    assert data["idle"] == 1
+    assert data["running"] == 1
+    assert data["success"] == 1
+    assert data["failed"] == 1
+
+
+@pytest.mark.asyncio
 async def test_delete_testcase(
     auth_client: AsyncClient, data_home: Path
 ) -> None:

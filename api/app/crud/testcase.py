@@ -56,6 +56,39 @@ async def count(
     return (await db.execute(stmt)).scalar_one() or 0
 
 
+def _apply_filters(
+    stmt,
+    id: int | None = None,
+    name: str | None = None,
+    biz: str | None = None,
+    service: str | None = None,
+):
+    if id is not None:
+        stmt = stmt.where(TestCase.id == id)
+    if name is not None:
+        stmt = stmt.where(TestCase.name.like(f"%{name}%"))
+    if biz is not None:
+        stmt = stmt.where(TestCase.biz.like(f"%{biz}%"))
+    if service is not None:
+        stmt = stmt.where(TestCase.service.like(f"%{service}%"))
+    return stmt
+
+
+async def count_by_status(
+    db: AsyncSession,
+    id: int | None = None,
+    name: str | None = None,
+    biz: str | None = None,
+    service: str | None = None,
+) -> dict[int, int]:
+    """按状态聚合统计，过滤条件与 list/count 保持一致。"""
+    stmt = select(TestCase.status, func.count()).select_from(TestCase)
+    stmt = _apply_filters(stmt, id=id, name=name, biz=biz, service=service)
+    stmt = stmt.group_by(TestCase.status)
+    rows = (await db.execute(stmt)).all()
+    return {int(status): int(total) for status, total in rows}
+
+
 async def list_testcases(
     db: AsyncSession,
     id: int | None,

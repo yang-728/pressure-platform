@@ -18,6 +18,7 @@ from app.schemas.testcase import (
     TestCaseFullVO,
     TestCaseParam,
     TestCaseQuery,
+    TestCaseStatsVO,
     TestCaseVO,
 )
 from app.services import testcase as service
@@ -103,6 +104,20 @@ async def list_testcases(
 ) -> Response[PageVO[TestCaseVO]]:
     page = await service.get_testcase_list(db, query)
     return success(page)
+
+
+@router.get(
+    "/stats",
+    summary="用例状态统计",
+    response_model=Response[TestCaseStatsVO],
+    response_model_by_alias=True,
+)
+async def testcase_stats(
+    query: TestCaseQuery = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> Response[TestCaseStatsVO]:
+    stats = await service.get_testcase_stats(db, query)
+    return success(stats)
 
 
 @router.get(

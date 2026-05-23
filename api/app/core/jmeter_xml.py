@@ -11,6 +11,7 @@ JMX 是 JMeter 压测述表语，本质上是 XML。结构如下：
 from __future__ import annotations
 
 import logging
+import ntpath
 import os
 from typing import Any
 
@@ -88,13 +89,18 @@ def update_debug_thread(jmx_path: str) -> None:
     _write(tree, jmx_path)
 
 
+def _path_basename(path: str) -> str:
+    """兼容 JMX 里保存 Linux 路径或 Windows 路径。"""
+    return os.path.basename(ntpath.basename(path))
+
+
 def _csv_matches(csv_node, csv_filename: str) -> bool:
     """testname 直接匹配，或 filename 的 basename 匹配（兼容 JMX 里写绝对路径的情况）。"""
     if csv_node.get("testname") == csv_filename:
         return True
     for prop in csv_node.iter():
         if prop.get("name") == "filename" and prop.text:
-            if os.path.basename(prop.text) == csv_filename:
+            if _path_basename(prop.text) == csv_filename:
                 return True
     return False
 

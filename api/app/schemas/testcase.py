@@ -43,6 +43,18 @@ class TestCaseQuery(BaseQuery):
     service: str | None = None
 
 
+class TestCaseStatsVO(CamelModel):
+    """用例状态聚合统计。"""
+
+    total: int = 0
+    idle: int = 0
+    running: int = 0
+    success: int = 0
+    failed: int = 0
+    waiting: int = 0
+    canceled: int = 0
+
+
 class BatchDeleteParam(CamelModel):
     """对齐 Java testcase/batchDelete 接口体 {"ids": [1,2,3]}"""
 
