@@ -433,6 +433,29 @@ CREATE TABLE `mysterious_jmx_dubbo_attachment_args` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 COMMENT='JMX脚本Dubbo附件参数表';
 
+CREATE TABLE `mysterious_scheduled_task_log` (
+    `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `scheduled_task_id` bigint(20) NOT NULL DEFAULT '0' COMMENT '定时任务ID',
+    `test_case_id` bigint(20) NOT NULL DEFAULT '0' COMMENT '用例ID',
+    `trigger_type` varchar(16) NOT NULL DEFAULT '' COMMENT '触发类型：auto/manual',
+    `status` varchar(16) NOT NULL DEFAULT '' COMMENT '执行日志状态：triggered/skipped/failed',
+    `reason` text NOT NULL COMMENT '跳过或失败原因',
+    `message` text NOT NULL COMMENT '可读说明',
+    `region` varchar(255) NOT NULL DEFAULT '' COMMENT '执行区域，空表示全部区域',
+    `requested_slave_count` int NOT NULL DEFAULT '0' COMMENT '请求压力机数',
+    `available_slave_count` int NOT NULL DEFAULT '0' COMMENT '触发时可用健康压力机数',
+    `allocated_slave_count` int NOT NULL DEFAULT '0' COMMENT '实际分配压力机数',
+    `slave_hosts` text NOT NULL COMMENT '实际分配压力机host列表JSON',
+    `run_param` text NOT NULL COMMENT '执行参数快照JSON',
+    `trigger_time` datetime NOT NULL COMMENT '触发时间',
+    `next_run_at` datetime NULL COMMENT '处理后的下一次执行时间',
+    `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '生成时间',
+    PRIMARY KEY (`id`),
+    KEY `idx_scheduled_task_id` (`scheduled_task_id`) USING BTREE,
+    KEY `idx_test_case_id` (`test_case_id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+COMMENT='定时任务执行日志表';
+
 -- master节点用例，报告目录
 INSERT INTO mysterious_config (config_key, config_value, description) VALUES ("MASTER_DATA_HOME", "/opt/mysterious/mysterious-data", "master节点用例，报告目录");
 -- master节点Jmeter路径

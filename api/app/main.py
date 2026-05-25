@@ -62,8 +62,9 @@ async def lifespan(app: FastAPI):
     app.state.start_time = time.monotonic()
     log.info("Mysterious API starting on port %s", get_settings().server_port)
 
-    from app.db.schema import ensure_report_snapshot_columns
+    from app.db.schema import ensure_report_snapshot_columns, ensure_scheduled_task_log_table
     await ensure_report_snapshot_columns()
+    await ensure_scheduled_task_log_table()
 
     # 初始化：创建 admin 用户（如不存在）
     async with AsyncSessionLocal() as db:

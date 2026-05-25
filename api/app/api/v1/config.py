@@ -9,7 +9,7 @@ from app.core.context import UserContext
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
-from app.schemas.config import ConfigParam, ConfigQuery, ConfigVO
+from app.schemas.config import ConfigCategoryVO, ConfigParam, ConfigQuery, ConfigVO
 from app.services import config as service
 
 router = APIRouter(
@@ -76,6 +76,17 @@ async def list_configs(
 ) -> Response[PageVO[ConfigVO]]:
     page = await service.get_config_list(db, query)
     return success(page)
+
+
+@router.get(
+    "/categories",
+    summary="获取配置分类列表",
+    response_model=Response[list[ConfigCategoryVO]],
+    response_model_by_alias=True,
+)
+async def list_categories() -> Response[list[ConfigCategoryVO]]:
+    categories = await service.get_categories()
+    return success(categories)
 
 
 @router.get(

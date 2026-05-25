@@ -7,13 +7,14 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import stamp_create, stamp_modify
+from app.core.config_catalog import CATEGORIES, get_category_name, get_category_sort, get_config_meta
 from app.core.codes import Codes
 from app.core.context import UserContext
 from app.core.exceptions import MysteriousException
 from app.core.response import PageVO
 from app.crud import config as crud
 from app.models.config import Config
-from app.schemas.config import ConfigParam, ConfigQuery, ConfigVO
+from app.schemas.config import ConfigCategoryVO, ConfigParam, ConfigQuery, ConfigVO
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +27,20 @@ def _check_param(param: ConfigParam) -> None:
 
 
 def _to_vo(obj: Config) -> ConfigVO:
-    return ConfigVO.model_validate(obj)
+    meta = get_config_meta(obj.config_key)
+    vo = ConfigVO.model_validate(obj)
+    vo.category = meta.category
+    vo.category_name = get_category_name(meta.category)
+    vo.display_name = meta.display_name
+    vo.value_type = meta.value_type
+    vo.sort = get_category_sort(meta.category) * 1000 + meta.sort
+    return vo
+
+
+def _matches_category(obj: Config, category: str | None) -> bool:
+    if not category or category == "all":
+        return True
+    return get_config_meta(obj.config_key).category == category
 
 
 async def add_config(db: AsyncSession, param: ConfigParam, user: UserContext) -> int:
@@ -73,14 +87,27 @@ async def delete_config(db: AsyncSession, id: int) -> bool:
 
 async def get_config_list(db: AsyncSession, query: ConfigQuery) -> PageVO[ConfigVO]:
     page_vo: PageVO[ConfigVO] = PageVO(page=query.page, size=query.size, total=0, list=[])
+    if query.category:
+        configs = await crud.list_all_configs(db, config_key=query.config_key)
+        vos = [_to_vo(c) for c in configs if _matches_category(c, query.category)]
+        vos.sort(key=lambda item: (item.sort, item.config_key))
+        page_vo.total = len(vos)
+        offset = PageVO.offset(query.page, query.size)
+        page_vo.list = vos[offset:offset + query.size]
+        return page_vo
+
     total = await crud.count(db, config_key=query.config_key)
     if total <= 0:
         return page_vo
     page_vo.total = total
     offset = PageVO.offset(query.page, query.size)
     configs = await crud.list_configs(db, config_key=query.config_key, offset=offset, limit=query.size)
-    page_vo.list = [_to_vo(c) for c in configs]
+    page_vo.list = sorted([_to_vo(c) for c in configs], key=lambda item: (item.sort, item.config_key))
     return page_vo
+
+
+async def get_categories() -> list[ConfigCategoryVO]:
+    return [ConfigCategoryVO(key=item.key, name=item.name, sort=item.sort) for item in CATEGORIES]
 
 
 async def get_value(db: AsyncSession, key: str) -> str:

@@ -97,6 +97,50 @@ async def test_list_config_search(auth_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_config_categories(auth_client: AsyncClient) -> None:
+    resp = await auth_client.get("/config/categories")
+    body = resp.json()
+    assert body["code"] == 0
+    categories = body["data"]
+    keys = [item["key"] for item in categories]
+    assert keys[:3] == ["business", "jmeter", "grafana"]
+    assert "retention" in keys
+    assert categories[0]["name"] == "业务选项"
+
+
+@pytest.mark.asyncio
+async def test_list_config_by_category_adds_metadata(auth_client: AsyncClient) -> None:
+    await auth_client.post(
+        "/config/add",
+        json={"configKey": "MASTER_JMETER_BIN_HOME", "configValue": "/opt/jmeter/bin", "description": "bin"},
+    )
+    await auth_client.post(
+        "/config/add",
+        json={"configKey": "GRAFANA_DASHBOARD_URL", "configValue": "http://grafana/d/abc", "description": "grafana"},
+    )
+    await auth_client.post(
+        "/config/add",
+        json={"configKey": "CUSTOM_UNKNOWN", "configValue": "x", "description": "custom"},
+    )
+
+    resp = await auth_client.get("/config/list?page=1&size=10&category=jmeter")
+    page = resp.json()["data"]
+    assert page["total"] == 1
+    item = page["list"][0]
+    assert item["configKey"] == "MASTER_JMETER_BIN_HOME"
+    assert item["category"] == "jmeter"
+    assert item["categoryName"] == "JMeter"
+    assert item["displayName"] == "Master JMeter执行目录"
+    assert item["valueType"] == "path"
+
+    other_resp = await auth_client.get("/config/list?page=1&size=10&category=other")
+    other_page = other_resp.json()["data"]
+    assert other_page["total"] == 1
+    assert other_page["list"][0]["configKey"] == "CUSTOM_UNKNOWN"
+    assert other_page["list"][0]["category"] == "other"
+
+
+@pytest.mark.asyncio
 async def test_delete_config(auth_client: AsyncClient) -> None:
     add_resp = await auth_client.post(
         "/config/add", json={"configKey": "DEL", "configValue": "v", "description": "d"}

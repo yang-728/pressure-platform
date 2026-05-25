@@ -15,7 +15,19 @@ class ConfigVO(BaseVO):
     config_key: str = ""
     config_value: str = ""
     description: str = ""
+    category: str = ""
+    category_name: str = ""
+    display_name: str = ""
+    value_type: str = "text"
+    sort: int = 0
 
 
 class ConfigQuery(BaseQuery):
     config_key: str | None = None
+    category: str | None = None
+
+
+class ConfigCategoryVO(CamelModel):
+    key: str
+    name: str
+    sort: int

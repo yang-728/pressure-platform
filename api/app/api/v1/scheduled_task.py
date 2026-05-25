@@ -11,6 +11,8 @@ from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
 from app.schemas.scheduled_task import (
+    ScheduledTaskLogQuery,
+    ScheduledTaskLogVO,
     ScheduledTaskParam,
     ScheduledTaskQuery,
     ScheduledTaskVO,
@@ -106,6 +108,20 @@ async def trigger_scheduled_task(
     if ok:
         await audit_record(db, current, "EXECUTE", "scheduled_task", id, detail=f"立即触发定时任务 #{id}")
     return success(ok)
+
+
+@router.get(
+    "/logs",
+    summary="分页查询定时任务执行日志",
+    response_model=Response[PageVO[ScheduledTaskLogVO]],
+    response_model_by_alias=True,
+)
+async def list_scheduled_task_logs(
+    query: ScheduledTaskLogQuery = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> Response[PageVO[ScheduledTaskLogVO]]:
+    page = await service.get_execution_logs(db, query)
+    return success(page)
 
 
 @router.get(

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import Field
+from pydantic import Field, field_serializer
 
-from app.schemas.base import BaseQuery, BaseVO, CamelModel
+from app.schemas.base import BaseQuery, BaseVO, CamelModel, _fmt_dt
 from app.schemas.testcase import RunParam
 
 
@@ -44,3 +44,36 @@ class ScheduledTaskQuery(BaseQuery):
 
     test_case_id: int | None = None
     enabled: int | None = None
+
+
+class ScheduledTaskLogQuery(BaseQuery):
+    """分页查询定时任务执行日志。"""
+
+    scheduled_task_id: int | None = Field(default=None, alias="scheduledTaskId")
+    test_case_id: int | None = Field(default=None, alias="testCaseId")
+    status: str | None = None
+
+
+class ScheduledTaskLogVO(CamelModel):
+    """定时任务执行日志响应。"""
+
+    id: int | None = None
+    scheduled_task_id: int = 0
+    test_case_id: int = 0
+    trigger_type: str = ""
+    status: str = ""
+    reason: str = ""
+    message: str = ""
+    region: str = ""
+    requested_slave_count: int = 0
+    available_slave_count: int = 0
+    allocated_slave_count: int = 0
+    slave_hosts: str = ""
+    run_param: str = ""
+    trigger_time: datetime | None = None
+    next_run_at: datetime | None = None
+    create_time: datetime | None = None
+
+    @field_serializer("trigger_time", "next_run_at", "create_time", when_used="json")
+    def _ser_dt(self, v: datetime | None) -> str | None:
+        return _fmt_dt(v)

@@ -59,3 +59,11 @@ async def list_configs(
         stmt = stmt.where(Config.config_key.like(f"%{config_key}%"))
     stmt = stmt.order_by(Config.modify_time.desc()).offset(offset).limit(limit)
     return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_all_configs(db: AsyncSession, config_key: str | None = None) -> list[Config]:
+    stmt = select(Config)
+    if config_key is not None:
+        stmt = stmt.where(Config.config_key.like(f"%{config_key}%"))
+    stmt = stmt.order_by(Config.modify_time.desc())
+    return list((await db.execute(stmt)).scalars().all())

@@ -58,3 +58,40 @@ async def ensure_report_snapshot_columns() -> None:
             ddl = definitions["mysql"] if dialect == "mysql" else definitions["default"]
             await conn.execute(text(f"ALTER TABLE mysterious_report ADD COLUMN {name} {ddl}"))
             log.info("已补齐 mysterious_report.%s 字段", name)
+
+
+async def ensure_scheduled_task_log_table() -> None:
+    """Create scheduled task execution log table for upgraded deployments."""
+    async with async_engine.begin() as conn:
+        dialect = conn.dialect.name
+        tables = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
+        if "mysterious_scheduled_task_log" in tables:
+            return
+        id_type = "bigint(20) NOT NULL AUTO_INCREMENT" if dialect == "mysql" else "INTEGER NOT NULL"
+        dt_default = "datetime NOT NULL DEFAULT CURRENT_TIMESTAMP" if dialect == "mysql" else "DATETIME NOT NULL"
+        ddl = f"""
+        CREATE TABLE mysterious_scheduled_task_log (
+            id {id_type},
+            scheduled_task_id bigint NOT NULL DEFAULT 0,
+            test_case_id bigint NOT NULL DEFAULT 0,
+            trigger_type varchar(16) NOT NULL DEFAULT '',
+            status varchar(16) NOT NULL DEFAULT '',
+            reason text NOT NULL,
+            message text NOT NULL,
+            region varchar(255) NOT NULL DEFAULT '',
+            requested_slave_count int NOT NULL DEFAULT 0,
+            available_slave_count int NOT NULL DEFAULT 0,
+            allocated_slave_count int NOT NULL DEFAULT 0,
+            slave_hosts text NOT NULL,
+            run_param text NOT NULL,
+            trigger_time datetime NOT NULL,
+            next_run_at datetime NULL,
+            create_time {dt_default},
+            PRIMARY KEY (id)
+        )
+        """
+        await conn.execute(text(ddl))
+        if dialect == "mysql":
+            await conn.execute(text("CREATE INDEX idx_scheduled_task_log_task_id ON mysterious_scheduled_task_log (scheduled_task_id)"))
+            await conn.execute(text("CREATE INDEX idx_scheduled_task_log_test_case_id ON mysterious_scheduled_task_log (test_case_id)"))
+        log.info("已创建 mysterious_scheduled_task_log 表")
