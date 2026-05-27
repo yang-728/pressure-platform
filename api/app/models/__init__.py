@@ -1,6 +1,7 @@
 """统一 import 所有 ORM 模型，方便 Base.metadata.create_all 能感知到全部表"""
 
 from app.models.audit_log import AuditLog
+from app.models.ai_generation import AiGenerationArtifact, AiGenerationTask
 from app.models.config import Config
 from app.models.csv import Csv
 from app.models.jar import Jar
@@ -23,6 +24,8 @@ from app.models.user import User
 
 __all__ = [
     "AuditLog",
+    "AiGenerationArtifact",
+    "AiGenerationTask",
     "Config",
     "Csv",
     "Jar",

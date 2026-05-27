@@ -8,6 +8,7 @@ Phase 5 把 debug / run / stop / syncNode / getFull / getJMeterResult 一起补�
 from __future__ import annotations
 
 import logging
+import asyncio
 import json
 import math
 import os
@@ -329,6 +330,71 @@ async def _is_init_artifact_testcase(db: AsyncSession, testcase_id: int) -> bool
     return testcase_id in _parse_id_set(raw)
 
 
+async def _sync_case_dependencies_to_slaves(
+    db: AsyncSession,
+    testcase_id: int,
+    slaves: list,
+) -> None:
+    """执行前把当前用例依赖文件补同步到本次选中的 slave。"""
+    if not slaves:
+        return
+    csvs = await csv_crud.get_by_test_case_id(db, testcase_id)
+    jars = await jar_crud.get_by_test_case_id(db, testcase_id)
+    if not csvs and not jars:
+        return
+
+    for slave in slaves:
+        ssh = SSHClient(slave.host, slave.port, slave.username, slave.password)
+        for csv_obj in csvs:
+            local_path = csv_obj.csv_dir + csv_obj.dst_name
+            try:
+                await ssh.scp_file(local_path, csv_obj.csv_dir, raise_on_error=True)
+            except MysteriousException as e:
+                log.warning("执行前同步 CSV 到 slave %s 失败: %s", slave.host, local_path)
+                raise MysteriousException(
+                    Codes.FAIL,
+                    message=f"压力机「{slave.host}」同步CSV文件失败: {csv_obj.src_name}",
+                ) from e
+        for jar_obj in jars:
+            local_path = jar_obj.jar_dir + jar_obj.dst_name
+            try:
+                await ssh.scp_file(local_path, jar_obj.jar_dir, raise_on_error=True)
+            except MysteriousException as e:
+                log.warning("执行前同步 JAR 到 slave %s 失败: %s", slave.host, local_path)
+                raise MysteriousException(
+                    Codes.FAIL,
+                    message=f"压力机「{slave.host}」同步JAR文件失败: {jar_obj.src_name}",
+                ) from e
+
+
+async def _sync_dependency_files_to_slave(slave, files: list[tuple[str, str, str, str]]) -> None:
+    """把文件并发同步到单台 slave，收集失败后一次性返回。"""
+    if not files:
+        return
+    semaphore = asyncio.Semaphore(6)
+    errors: list[str] = []
+
+    async def sync_one(kind: str, name: str, local_path: str, remote_dir: str) -> None:
+        async with semaphore:
+            if not os.path.exists(local_path):
+                errors.append(f"{kind} {name}: master文件不存在")
+                return
+            ssh = SSHClient(slave.host, slave.port, slave.username, slave.password)
+            try:
+                await ssh.scp_file(local_path, remote_dir, raise_on_error=True)
+            except MysteriousException as e:
+                errors.append(f"{kind} {name}: {e.override_message or e.code.message}")
+
+    await asyncio.gather(*(sync_one(*item) for item in files))
+    if errors:
+        shown = "；".join(errors[:5])
+        more = f"；其余 {len(errors) - 5} 个失败" if len(errors) > 5 else ""
+        raise MysteriousException(
+            Codes.FAIL,
+            message=f"压力机「{slave.host}」同步失败 {len(errors)}/{len(files)}: {shown}{more}",
+        )
+
+
 async def debug_testcase(db: AsyncSession, id: int, user: UserContext) -> bool:
     bin_home = await _ensure_master_bin(db, "debug")
     testcase = await crud.get_by_id(db, id)
@@ -458,6 +524,7 @@ async def run_testcase(db: AsyncSession, id: int, param: RunParam, user: UserCon
             except MysteriousException as e:
                 log.info("run 前置检查 slave %s 失败: %s", s.host, e)
                 raise MysteriousException(Codes.NODE_CANNOT_CONNECT) from e
+        await _sync_case_dependencies_to_slaves(db, id, healthy_slaves)
 
     # 压测参数优先使用传入值，否则回退到用例自身保存的值
     num_threads = param.num_threads if param.num_threads not in (None, "") else (testcase.num_threads or "10")
@@ -623,15 +690,17 @@ async def sync_node(db: AsyncSession, node_id: int, user: UserContext) -> bool:
     if node.status == NodeStatus.ENABLE.value:
         raise MysteriousException(Codes.NODE_IS_ENABLE)
 
-    ssh = SSHClient(node.host, node.port, node.username, node.password)
     # Java 端 testCaseList = getTestCaseListByStatus(null)，即所有用例
     stmt = select(TestCase)
     all_cases = list((await db.execute(stmt)).scalars().all())
+    files: list[tuple[str, str, str, str]] = []
     for tc in all_cases:
         for csv_obj in await csv_crud.get_by_test_case_id(db, tc.id):
-            await ssh.scp_file(csv_obj.csv_dir + csv_obj.src_name, csv_obj.csv_dir)
+            files.append(("CSV", csv_obj.src_name, csv_obj.csv_dir + csv_obj.dst_name, csv_obj.csv_dir))
         for jar_obj in await jar_crud.get_by_test_case_id(db, tc.id):
-            await ssh.scp_file(jar_obj.jar_dir + jar_obj.src_name, jar_obj.jar_dir)
+            files.append(("JAR", jar_obj.src_name, jar_obj.jar_dir + jar_obj.dst_name, jar_obj.jar_dir))
+    log.info("syncNode node=%s host=%s files=%d", node_id, node.host, len(files))
+    await _sync_dependency_files_to_slave(node, files)
     return True
 
 

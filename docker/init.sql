@@ -28,6 +28,50 @@ CREATE TABLE `mysterious_config` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 COMMENT='配置表';
 
+CREATE TABLE `mysterious_ai_generation_task` (
+    `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `task_name` varchar(255) NOT NULL DEFAULT '' COMMENT '生成任务名称',
+    `generation_type` varchar(64) NOT NULL DEFAULT '' COMMENT '生成类型',
+    `input_type` varchar(32) NOT NULL DEFAULT '' COMMENT '输入类型',
+    `input_filename` varchar(255) NOT NULL DEFAULT '' COMMENT '输入文件名',
+    `input_path` varchar(512) NOT NULL DEFAULT '' COMMENT '输入文件路径',
+    `output_filename` varchar(255) NOT NULL DEFAULT '' COMMENT '输出文件名',
+    `output_path` varchar(512) NOT NULL DEFAULT '' COMMENT '输出文件路径',
+    `work_dir` varchar(512) NOT NULL DEFAULT '' COMMENT '任务工作目录',
+    `status` varchar(32) NOT NULL DEFAULT 'pending' COMMENT '任务状态',
+    `params_json` text NOT NULL COMMENT '生成参数JSON',
+    `error_message` text NOT NULL COMMENT '错误信息',
+    `generation_log` text NOT NULL COMMENT '生成日志',
+    `creator_id` varchar(32) NOT NULL DEFAULT '' COMMENT '创建人ID',
+    `creator` varchar(32) NOT NULL DEFAULT '' COMMENT '创建人',
+    `modifier_id` varchar(32) NOT NULL DEFAULT '' COMMENT '修改人ID',
+    `modifier` varchar(32) NOT NULL DEFAULT '' COMMENT '修改人',
+    `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '生成时间',
+    `modify_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    KEY `idx_ai_generation_task_status` (`status`) USING BTREE,
+    KEY `idx_ai_generation_task_type` (`generation_type`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+COMMENT='AI用例生成任务表';
+
+CREATE TABLE `mysterious_ai_generation_artifact` (
+    `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `task_id` bigint(20) NOT NULL DEFAULT '0' COMMENT '生成任务ID',
+    `artifact_type` varchar(32) NOT NULL DEFAULT '' COMMENT '产物类型',
+    `filename` varchar(255) NOT NULL DEFAULT '' COMMENT '产物文件名',
+    `file_path` varchar(512) NOT NULL DEFAULT '' COMMENT '产物路径',
+    `file_size` int NOT NULL DEFAULT '0' COMMENT '产物大小',
+    `creator_id` varchar(32) NOT NULL DEFAULT '' COMMENT '创建人ID',
+    `creator` varchar(32) NOT NULL DEFAULT '' COMMENT '创建人',
+    `modifier_id` varchar(32) NOT NULL DEFAULT '' COMMENT '修改人ID',
+    `modifier` varchar(32) NOT NULL DEFAULT '' COMMENT '修改人',
+    `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '生成时间',
+    `modify_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    KEY `idx_ai_generation_artifact_task_id` (`task_id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+COMMENT='AI用例生成产物表';
+
 CREATE TABLE `mysterious_node` (
     `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键',
     `name` varchar(255) NOT NULL DEFAULT '' COMMENT '节点名称',
@@ -470,3 +514,11 @@ INSERT INTO mysterious_config (config_key, config_value, description) VALUES ("S
 INSERT INTO mysterious_config (config_key, config_value, description) VALUES ("MASTER_HOST_PORT", "192.168.20.224:9998", "压测报告预览链接的Host");
 -- jmeter在线编辑，基础jmx脚本文件路径
 INSERT INTO mysterious_config (config_key, config_value, description) VALUES ("MASTER_BASE_JMX_FILES_PATH", "/opt/mysterious/mysterious-jmx", "jmeter在线编辑，基础jmx脚本文件路径");
+-- AI用例生成工作目录
+INSERT INTO mysterious_config (config_key, config_value, description) VALUES ("AI_GENERATION_WORK_DIR", "/opt/mysterious/mysterious-data/ai-generation", "AI用例生成工作目录");
+-- Codex命令路径
+INSERT INTO mysterious_config (config_key, config_value, description) VALUES ("AI_CODEX_BIN", "codex", "Codex命令路径");
+-- AI生成超时时间
+INSERT INTO mysterious_config (config_key, config_value, description) VALUES ("AI_GENERATION_TIMEOUT_SECONDS", "1800", "AI生成超时时间秒");
+-- JMX生成Skill名称
+INSERT INTO mysterious_config (config_key, config_value, description) VALUES ("AI_JMX_SKILL_NAME", "jmeter-generator", "JMX生成Skill名称");

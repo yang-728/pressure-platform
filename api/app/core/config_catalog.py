@@ -31,7 +31,8 @@ CATEGORIES: tuple[ConfigCategory, ...] = (
     ConfigCategory("report", "报告", 40),
     ConfigCategory("schedule", "调度", 50),
     ConfigCategory("init_data", "初始化数据", 60),
-    ConfigCategory("retention", "系统保留策略", 70),
+    ConfigCategory("ai_generation", "AI生成", 70),
+    ConfigCategory("retention", "系统保留策略", 80),
     ConfigCategory("other", "其他", 999),
 )
 
@@ -60,6 +61,10 @@ CONFIG_META: dict[str, ConfigMeta] = {
     "MASTER_DATA_HOME": ConfigMeta("report", "Master数据和报告目录", "path", 10),
     "MASTER_HOST_PORT": ConfigMeta("report", "报告预览Host", "text", 20),
     "INIT_ARTIFACT_TESTCASE_IDS": ConfigMeta("init_data", "初始化产物用例ID", "text", 10),
+    "AI_GENERATION_WORK_DIR": ConfigMeta("ai_generation", "AI生成工作目录", "path", 10),
+    "AI_GENERATION_TIMEOUT_SECONDS": ConfigMeta("ai_generation", "AI生成超时时间秒", "number", 20),
+    "AI_CODEX_BIN": ConfigMeta("ai_generation", "Codex命令路径", "text", 30),
+    "AI_JMX_SKILL_NAME": ConfigMeta("ai_generation", "JMX生成Skill名称", "text", 40),
     "REPORT_RETENTION_DAYS": ConfigMeta("retention", "测试报告保留天数", "number", 10),
     "AUDIT_RETENTION_DAYS": ConfigMeta("retention", "审计日志保留天数", "number", 20),
 }

@@ -322,6 +322,24 @@ def test_parse_jtl_metrics_converts_distributed_threads_to_total(tmp_path) -> No
     assert items[0]["threads"] == 30
 
 
+def test_parse_jtl_metrics_uses_thread_names_when_distributed_all_threads_is_one(tmp_path) -> None:
+    jtl = tmp_path / "result.jtl"
+    rows = ["timeStamp,elapsed,success,allThreads,grpThreads,threadName"]
+    for i in range(1, 51):
+        rows.append(f"1700000000000,100,true,1,1,10.0.0.1:1099-query 1-{i}")
+        rows.append(f"1700000000000,100,true,1,1,10.0.0.2:1099-query 1-{i}")
+    jtl.write_text("\n".join(rows), encoding="utf-8")
+
+    items = _parse_jtl_metrics(
+        str(jtl),
+        5,
+        {"total_threads": 100, "slave_count": 2, "per_slave_threads": 50},
+    )
+
+    assert len(items) == 1
+    assert items[0]["threads"] == 100
+
+
 def test_parse_jtl_metrics_keeps_single_machine_threads(tmp_path) -> None:
     jtl = tmp_path / "result.jtl"
     jtl.write_text(

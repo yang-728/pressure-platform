@@ -11,6 +11,72 @@ from app.db.session import async_engine
 log = logging.getLogger(__name__)
 
 
+async def ensure_ai_generation_tables() -> None:
+    """Create AI generation task/artifact tables for upgraded deployments."""
+    async with async_engine.begin() as conn:
+        dialect = conn.dialect.name
+        tables = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
+        if "mysterious_ai_generation_task" in tables and "mysterious_ai_generation_artifact" in tables:
+            return
+
+        id_type = "bigint(20) NOT NULL AUTO_INCREMENT" if dialect == "mysql" else "INTEGER NOT NULL"
+        dt_default = "datetime NOT NULL DEFAULT CURRENT_TIMESTAMP" if dialect == "mysql" else "DATETIME NOT NULL"
+
+        if "mysterious_ai_generation_task" not in tables:
+            task_ddl = f"""
+            CREATE TABLE mysterious_ai_generation_task (
+                id {id_type},
+                task_name varchar(255) NOT NULL DEFAULT '',
+                generation_type varchar(64) NOT NULL DEFAULT '',
+                input_type varchar(32) NOT NULL DEFAULT '',
+                input_filename varchar(255) NOT NULL DEFAULT '',
+                input_path varchar(512) NOT NULL DEFAULT '',
+                output_filename varchar(255) NOT NULL DEFAULT '',
+                output_path varchar(512) NOT NULL DEFAULT '',
+                work_dir varchar(512) NOT NULL DEFAULT '',
+                status varchar(32) NOT NULL DEFAULT 'pending',
+                params_json text NOT NULL,
+                error_message text NOT NULL,
+                generation_log text NOT NULL,
+                creator_id varchar(32) NOT NULL DEFAULT '',
+                creator varchar(32) NOT NULL DEFAULT '',
+                modifier_id varchar(32) NOT NULL DEFAULT '',
+                modifier varchar(32) NOT NULL DEFAULT '',
+                create_time {dt_default},
+                modify_time {dt_default},
+                PRIMARY KEY (id)
+            )
+            """
+            await conn.execute(text(task_ddl))
+            if dialect == "mysql":
+                await conn.execute(text("CREATE INDEX idx_ai_generation_task_status ON mysterious_ai_generation_task (status)"))
+                await conn.execute(text("CREATE INDEX idx_ai_generation_task_type ON mysterious_ai_generation_task (generation_type)"))
+            log.info("已创建 mysterious_ai_generation_task 表")
+
+        if "mysterious_ai_generation_artifact" not in tables:
+            artifact_ddl = f"""
+            CREATE TABLE mysterious_ai_generation_artifact (
+                id {id_type},
+                task_id bigint NOT NULL DEFAULT 0,
+                artifact_type varchar(32) NOT NULL DEFAULT '',
+                filename varchar(255) NOT NULL DEFAULT '',
+                file_path varchar(512) NOT NULL DEFAULT '',
+                file_size int NOT NULL DEFAULT 0,
+                creator_id varchar(32) NOT NULL DEFAULT '',
+                creator varchar(32) NOT NULL DEFAULT '',
+                modifier_id varchar(32) NOT NULL DEFAULT '',
+                modifier varchar(32) NOT NULL DEFAULT '',
+                create_time {dt_default},
+                modify_time {dt_default},
+                PRIMARY KEY (id)
+            )
+            """
+            await conn.execute(text(artifact_ddl))
+            if dialect == "mysql":
+                await conn.execute(text("CREATE INDEX idx_ai_generation_artifact_task_id ON mysterious_ai_generation_artifact (task_id)"))
+            log.info("已创建 mysterious_ai_generation_artifact 表")
+
+
 _REPORT_COLUMNS = {
     "region": {
         "mysql": "varchar(255) NOT NULL DEFAULT '' COMMENT '执行区域快照'",

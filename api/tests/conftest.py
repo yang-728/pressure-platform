@@ -251,7 +251,7 @@ def mock_ssh(request, monkeypatch) -> Any:
         # rm/mkdir 等
         return ""
 
-    async def fake_scp(self, local_path: str, remote_dir: str) -> None:
+    async def fake_scp(self, local_path: str, remote_dir: str, *, raise_on_error: bool = False) -> None:
         return None
 
     monkeypatch.setattr(ssh_mod.SSHClient, "telnet", fake_telnet)

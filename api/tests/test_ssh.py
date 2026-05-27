@@ -113,6 +113,29 @@ async def test_scp_calls_mkdir_then_sftp_put(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_scp_quotes_remote_dir_when_path_has_shell_special_chars(monkeypatch, tmp_path):
+    """远端目录包含括号等 shell 特殊字符时，mkdir 命令必须转义路径。"""
+    local_file = tmp_path / "data.csv"
+    local_file.write_bytes(b"abc")
+
+    sftp_mock = MagicMock()
+    paramiko_client = MagicMock()
+    paramiko_client.exec_command.return_value = (None, _fake_stdout(""), None)
+    paramiko_client.open_sftp.return_value = sftp_mock
+    monkeypatch.setattr(ssh_mod.SSHClient, "_connect", lambda self: paramiko_client)
+
+    client = ssh_mod.SSHClient("h", 22, "u", "p")
+    await client.scp_file(str(local_file), "/remote/用户登录配置查询(PC端)/csv")
+
+    cmd_arg = paramiko_client.exec_command.call_args[0][0]
+    assert cmd_arg == "mkdir -p '/remote/用户登录配置查询(PC端)/csv'"
+    sftp_mock.put.assert_called_once_with(
+        str(local_file),
+        "/remote/用户登录配置查询(PC端)/csv/data.csv",
+    )
+
+
+@pytest.mark.asyncio
 async def test_scp_swallow_paramiko_error(monkeypatch, tmp_path):
     """scp 内部 paramiko 报错只打日志，不抛"""
     local_file = tmp_path / "x.csv"

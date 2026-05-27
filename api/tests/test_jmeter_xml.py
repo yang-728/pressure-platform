@@ -111,6 +111,21 @@ def test_update_debug_thread_modifies_stepping_when_enabled(tmp_path: Path) -> N
     assert flight == ["1"]
 
 
+def test_update_run_thread_standard_threadgroup_uses_duration_until_stopped(tmp_path: Path) -> None:
+    jmx = _copy_sample(tmp_path)
+    dest = tmp_path / "run.jmx"
+
+    jmeter_xml.update_run_thread(str(jmx), str(dest), "50", "30", "600")
+
+    tree = etree.parse(str(dest))
+    assert _find_named_text(tree, "ThreadGroup", "ThreadGroup.num_threads") == ["50"]
+    assert _find_named_text(tree, "ThreadGroup", "ThreadGroup.ramp_time") == ["30"]
+    assert _find_named_text(tree, "ThreadGroup", "ThreadGroup.duration") == ["600"]
+    assert _find_named_text(tree, "ThreadGroup", "ThreadGroup.scheduler") == ["true"]
+    assert _find_named_text(tree, "ThreadGroup", "LoopController.continue_forever") == ["true"]
+    assert _find_named_text(tree, "ThreadGroup", "LoopController.loops") == ["-1"]
+
+
 def test_exist_csv_filename_true(tmp_path: Path) -> None:
     jmx = _copy_sample(tmp_path)
     assert jmeter_xml.exist_csv_filename(str(jmx), "data.csv") is True

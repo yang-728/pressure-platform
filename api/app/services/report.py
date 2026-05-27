@@ -526,6 +526,7 @@ def _parse_jtl_metrics(
                     success = row.get("success", "true").lower() == "true"
                     raw_threads = int(row.get("allThreads", "0") or row.get("grpThreads", "0"))
                     threads = _normalize_threads(raw_threads, run_meta)
+                    thread_name = (row.get("threadName") or "").strip()
                 except (ValueError, TypeError):
                     continue
                 if ts <= 0:
@@ -533,12 +534,14 @@ def _parse_jtl_metrics(
                 key = ts // window_ms * window_ms
                 bucket = buckets.setdefault(
                     key,
-                    {"elapsed": [], "fail": 0, "threads": 0, "count": 0},
+                    {"elapsed": [], "fail": 0, "threads": 0, "thread_names": set(), "count": 0},
                 )
                 bucket["elapsed"].append(elapsed)
                 if not success:
                     bucket["fail"] += 1
                 bucket["threads"] = max(bucket["threads"], threads)
+                if thread_name:
+                    bucket["thread_names"].add(thread_name)
                 bucket["count"] += 1
     except OSError as e:
         log.warning("读取 JTL 失败: %s", e)
@@ -552,6 +555,10 @@ def _parse_jtl_metrics(
             continue
         elapsed_sorted = sorted(b["elapsed"])
         dt = datetime.fromtimestamp(key / 1000.0)
+        active_threads = max(b["threads"], len(b.get("thread_names") or set()))
+        total_threads = _meta_int(run_meta or {}, "total_threads", 0)
+        if total_threads > 0:
+            active_threads = min(active_threads, total_threads)
         results.append(
             {
                 "timestamp": dt.strftime("%H:%M:%S"),
@@ -559,7 +566,7 @@ def _parse_jtl_metrics(
                 "avg_rt": round(sum(elapsed_sorted) / count, 1),
                 "p99_rt": round(_percentile(elapsed_sorted, 99), 1),
                 "error_rate": round(b["fail"] / count * 100, 2),
-                "threads": b["threads"],
+                "threads": active_threads,
             }
         )
     return results

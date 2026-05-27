@@ -159,6 +159,8 @@ def update_run_thread(jmx_path: str, dest_path: str, num_threads: str, ramp_time
         # 标准 ThreadGroup
         if el.tag == "ThreadGroup" and el.get("testclass") == "ThreadGroup":
             _set_named_props(el, {
+                "LoopController.continue_forever": "true",
+                "LoopController.loops": "-1",
                 "ThreadGroup.num_threads": num_threads,
                 "ThreadGroup.ramp_time": ramp_time,
                 "ThreadGroup.duration": duration,

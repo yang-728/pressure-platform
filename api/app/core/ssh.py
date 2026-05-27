@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shlex
 import socket
 
 import paramiko
@@ -41,9 +42,9 @@ class SSHClient:
         """SSH 执行命令，只取 stdout 第一行；空输出返回 'null'（对齐 Java）。"""
         return await asyncio.to_thread(self._exec_sync, command)
 
-    async def scp_file(self, local_path: str, remote_dir: str) -> None:
+    async def scp_file(self, local_path: str, remote_dir: str, *, raise_on_error: bool = False) -> None:
         """SCP 文件到远端目录（先 mkdir -p）。失败仅日志，不抛（对齐 Java）。"""
-        await asyncio.to_thread(self._scp_sync, local_path, remote_dir)
+        await asyncio.to_thread(self._scp_sync, local_path, remote_dir, raise_on_error)
 
     # --- 同步实现 ---
 
@@ -94,12 +95,14 @@ class SSHClient:
                 except Exception:
                     pass
 
-    def _scp_sync(self, local_path: str, remote_dir: str) -> None:
+    def _scp_sync(self, local_path: str, remote_dir: str, raise_on_error: bool = False) -> None:
         # 先确保远端目录存在（Java 行为）
         try:
-            self._exec_sync(f"mkdir -p {remote_dir}")
-        except Exception:
-            log.info("mkdir 远端目录失败: %s", remote_dir)
+            self._exec_sync(f"mkdir -p {shlex.quote(remote_dir)}")
+        except Exception as e:
+            log.info("mkdir 远端目录失败 host=%s dir=%s: %s", self.host, remote_dir, e)
+            if raise_on_error:
+                raise MysteriousException(Codes.SSH_EXEC_ERROR, message=f"创建远端目录失败: {remote_dir}") from e
             return
 
         client: paramiko.SSHClient | None = None
@@ -109,9 +112,11 @@ class SSHClient:
             remote_path = remote_dir.rstrip("/") + "/" + os.path.basename(local_path)
             sftp.put(local_path, remote_path)
             sftp.close()
-        except Exception:
+        except Exception as e:
             # 对齐 Java：scp 异常仅日志，不抛
-            log.info("SCP 失败 host=%s %s -> %s", self.host, local_path, remote_dir)
+            log.info("SCP 失败 host=%s %s -> %s: %s", self.host, local_path, remote_dir, e)
+            if raise_on_error:
+                raise MysteriousException(Codes.SSH_EXEC_ERROR, message=f"文件同步到压力机失败: {local_path}") from e
         finally:
             if client is not None:
                 try:

@@ -270,6 +270,62 @@ async def test_run_with_slaves_adds_R_flag(
     await jmeter_runner.wait_for_completion(case_id, timeout=10.0)
 
 
+@pytest.mark.asyncio
+async def test_run_syncs_current_case_dependencies_to_selected_slaves(
+    auth_client: AsyncClient,
+    data_home: Path,
+    jmeter_bin_home: Path,
+    sample_jmx_bytes: bytes,
+    db: AsyncSession,
+    monkeypatch,
+) -> None:
+    """执行前应把当前用例 CSV/JAR 补同步到本次选中的压力机。"""
+    from app.core import ssh as ssh_mod
+
+    case_id = await _create_case_with_jmx(auth_client, "r_sync_deps", sample_jmx_bytes)
+    await auth_client.post(
+        f"/csv/upload/{case_id}",
+        files={"csvFile": ("data.csv", b"a,b\n1,2\n", "text/csv")},
+    )
+    await auth_client.post(
+        f"/jar/upload/{case_id}",
+        files={"jarFile": ("dep.jar", b"x", "application/java-archive")},
+    )
+
+    scp_calls: list[tuple[str, str, bool]] = []
+
+    async def tracking_scp(self, local_path: str, remote_dir: str, *, raise_on_error: bool = False) -> None:
+        scp_calls.append((local_path, remote_dir, raise_on_error))
+
+    monkeypatch.setattr(ssh_mod.SSHClient, "scp_file", tracking_scp)
+
+    db.add(
+        Node(
+            name="sync-slave",
+            type=NodeType.SLAVE.value,
+            host="10.0.9.1",
+            username="root",
+            password="x",
+            port=22,
+            status=NodeStatus.ENABLE.value,
+            health_status=1,
+        )
+    )
+    await db.commit()
+
+    resp = await auth_client.post(
+        f"/testcase/run/{case_id}",
+        json={"numThreads": "10", "rampTime": "0", "duration": "60", "slaveCount": 1},
+    )
+    assert resp.json()["code"] == 0
+    await jmeter_runner.wait_for_completion(case_id, timeout=10.0)
+
+    assert len(scp_calls) == 2
+    assert all(call[2] is True for call in scp_calls)
+    assert any(local_path.endswith("/csv/data.csv") for local_path, _, _ in scp_calls)
+    assert any(local_path.endswith("/jar/dep.jar") for local_path, _, _ in scp_calls)
+
+
 # ---------------------------------------------------------------------------
 # stop
 # ---------------------------------------------------------------------------
@@ -384,7 +440,7 @@ async def test_sync_node_scp_called_for_csv_and_jar(
 
     scp_calls: list[tuple[str, str]] = []
 
-    async def tracking_scp(self, local_path: str, remote_dir: str) -> None:
+    async def tracking_scp(self, local_path: str, remote_dir: str, *, raise_on_error: bool = False) -> None:
         scp_calls.append((local_path, remote_dir))
 
     monkeypatch.setattr(ssh_mod.SSHClient, "scp_file", tracking_scp)
@@ -419,6 +475,51 @@ async def test_sync_node_scp_called_for_csv_and_jar(
     assert resp.json()["code"] == 0
     # 1 个 csv + 1 个 jar = 2 次 scp
     assert len(scp_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_node_reports_scp_failure(
+    auth_client: AsyncClient,
+    data_home: Path,
+    jmeter_home: Path,
+    sample_jmx_bytes: bytes,
+    db: AsyncSession,
+    monkeypatch,
+) -> None:
+    """点击同步时如果文件同步失败，应返回明确错误而不是吞掉失败。"""
+    from app.core import ssh as ssh_mod
+    from app.core.exceptions import MysteriousException
+
+    case_id = await _create_case_with_jmx(auth_client, "sn_fail", sample_jmx_bytes)
+    await auth_client.post(
+        f"/csv/upload/{case_id}",
+        files={"csvFile": ("data.csv", b"a,b\n1,2\n", "text/csv")},
+    )
+
+    async def failing_scp(self, local_path: str, remote_dir: str, *, raise_on_error: bool = False) -> None:
+        if raise_on_error:
+            raise MysteriousException(message="scp failed")
+
+    monkeypatch.setattr(ssh_mod.SSHClient, "scp_file", failing_scp)
+
+    n = Node(
+        name="newslv-fail",
+        type=NodeType.SLAVE.value,
+        host="10.0.0.100",
+        username="root",
+        password="x",
+        port=22,
+        status=NodeStatus.DISABLED.value,
+    )
+    db.add(n)
+    await db.commit()
+    await db.refresh(n)
+
+    resp = await auth_client.get(f"/testcase/syncNode/{n.id}")
+    body = resp.json()
+    assert body["code"] == -1
+    assert "同步失败" in body["message"]
+    assert "data.csv" in body["message"]
 
 
 # ---------------------------------------------------------------------------

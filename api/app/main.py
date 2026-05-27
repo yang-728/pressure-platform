@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.audit_log import router as audit_log_router
+from app.api.v1.ai_generation import router as ai_generation_router
 from app.api.v1.config import router as config_router
 from app.api.v1.csv import router as csv_router
 from app.api.v1.health import router as health_router
@@ -62,7 +63,12 @@ async def lifespan(app: FastAPI):
     app.state.start_time = time.monotonic()
     log.info("Mysterious API starting on port %s", get_settings().server_port)
 
-    from app.db.schema import ensure_report_snapshot_columns, ensure_scheduled_task_log_table
+    from app.db.schema import (
+        ensure_ai_generation_tables,
+        ensure_report_snapshot_columns,
+        ensure_scheduled_task_log_table,
+    )
+    await ensure_ai_generation_tables()
     await ensure_report_snapshot_columns()
     await ensure_scheduled_task_log_table()
 
@@ -123,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(user_router)
     app.include_router(config_router)
+    app.include_router(ai_generation_router)
     app.include_router(node_router)
     app.include_router(testcase_router)
     app.include_router(jmx_router)
