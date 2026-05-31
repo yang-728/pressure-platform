@@ -7,9 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit_helper import record as audit_record
 from app.core.context import UserContext
+from app.core.permissions import PERMISSION_NODE
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
+from app.deps.permission import require_permission
 from app.schemas.node import NodeParam, NodeQuery, NodeVO
 from app.services import node as service
 
@@ -28,7 +30,7 @@ router = APIRouter(
 )
 async def add_node(
     param: NodeParam,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_NODE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[int]:
     id = await service.add_node(db, param, current)
@@ -44,7 +46,7 @@ async def add_node(
 async def update_node(
     id: int,
     param: NodeParam,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_NODE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.update_node(db, id, param, current)
@@ -59,6 +61,7 @@ async def update_node(
 )
 async def get_by_id(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_NODE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[NodeVO | None]:
     node = await service.get_by_id(db, id)
@@ -73,7 +76,7 @@ async def get_by_id(
 )
 async def delete_node(
     id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_NODE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.delete_node(db, id)
@@ -90,6 +93,7 @@ async def delete_node(
 )
 async def list_nodes(
     query: NodeQuery = Depends(),
+    current: UserContext = Depends(require_permission(PERMISSION_NODE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[PageVO[NodeVO]]:
     page = await service.get_node_list(db, query)
@@ -131,7 +135,7 @@ async def enable_slave_count(
 )
 async def enable_node(
     id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_NODE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.enable_node(db, id, current)
@@ -148,7 +152,7 @@ async def enable_node(
 )
 async def disable_node(
     id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_NODE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.disable_node(db, id, current)

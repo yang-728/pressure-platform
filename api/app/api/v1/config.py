@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import UserContext
+from app.core.permissions import PERMISSION_CONFIG
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
+from app.deps.permission import require_permission
 from app.schemas.config import ConfigCategoryVO, ConfigParam, ConfigQuery, ConfigVO
 from app.services import config as service
 
@@ -27,7 +29,7 @@ router = APIRouter(
 )
 async def add_config(
     param: ConfigParam,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_CONFIG)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[int]:
     id = await service.add_config(db, param, current)
@@ -43,7 +45,7 @@ async def add_config(
 async def update_config(
     id: int,
     param: ConfigParam,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_CONFIG)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.update_config(db, id, param, current)
@@ -58,6 +60,7 @@ async def update_config(
 )
 async def delete_config(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_CONFIG)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.delete_config(db, id)
@@ -72,6 +75,7 @@ async def delete_config(
 )
 async def list_configs(
     query: ConfigQuery = Depends(),
+    current: UserContext = Depends(require_permission(PERMISSION_CONFIG)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[PageVO[ConfigVO]]:
     page = await service.get_config_list(db, query)
@@ -84,7 +88,9 @@ async def list_configs(
     response_model=Response[list[ConfigCategoryVO]],
     response_model_by_alias=True,
 )
-async def list_categories() -> Response[list[ConfigCategoryVO]]:
+async def list_categories(
+    current: UserContext = Depends(require_permission(PERMISSION_CONFIG)),
+) -> Response[list[ConfigCategoryVO]]:
     categories = await service.get_categories()
     return success(categories)
 

@@ -105,6 +105,21 @@ _REPORT_COLUMNS = {
 }
 
 
+_CSV_COLUMNS = {
+    "distribution_strategy": {
+        "mysql": "varchar(32) NOT NULL DEFAULT 'shared' COMMENT '分布式参数文件读取策略'",
+        "default": "VARCHAR(32) NOT NULL DEFAULT 'shared'",
+    },
+}
+
+_USER_ROLE_COLUMNS = {
+    "role_id": {
+        "mysql": "bigint NOT NULL DEFAULT 0 COMMENT '用户角色ID'",
+        "default": "INTEGER NOT NULL DEFAULT 0",
+    },
+}
+
+
 async def ensure_report_snapshot_columns() -> None:
     """Add report snapshot columns for existing databases.
 
@@ -124,6 +139,78 @@ async def ensure_report_snapshot_columns() -> None:
             ddl = definitions["mysql"] if dialect == "mysql" else definitions["default"]
             await conn.execute(text(f"ALTER TABLE mysterious_report ADD COLUMN {name} {ddl}"))
             log.info("已补齐 mysterious_report.%s 字段", name)
+
+
+async def ensure_csv_distribution_columns() -> None:
+    """Add CSV distribution strategy column for existing databases."""
+    async with async_engine.begin() as conn:
+        dialect = conn.dialect.name
+        columns = await conn.run_sync(
+            lambda sync_conn: {
+                col["name"] for col in inspect(sync_conn).get_columns("mysterious_csv")
+            }
+        )
+        for name, definitions in _CSV_COLUMNS.items():
+            if name in columns:
+                continue
+            ddl = definitions["mysql"] if dialect == "mysql" else definitions["default"]
+            await conn.execute(text(f"ALTER TABLE mysterious_csv ADD COLUMN {name} {ddl}"))
+            log.info("已补齐 mysterious_csv.%s 字段", name)
+
+
+async def ensure_rbac_schema() -> None:
+    """Create RBAC role tables and add user.role_id for upgraded deployments."""
+    async with async_engine.begin() as conn:
+        dialect = conn.dialect.name
+        tables = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
+        id_type = "bigint(20) NOT NULL AUTO_INCREMENT" if dialect == "mysql" else "INTEGER NOT NULL"
+        dt_default = "datetime NOT NULL DEFAULT CURRENT_TIMESTAMP" if dialect == "mysql" else "DATETIME NOT NULL"
+
+        if "mysterious_role" not in tables:
+            await conn.execute(text(f"""
+            CREATE TABLE mysterious_role (
+                id {id_type},
+                name varchar(128) NOT NULL DEFAULT '',
+                code varchar(64) NOT NULL DEFAULT '',
+                description varchar(255) NOT NULL DEFAULT '',
+                builtin int NOT NULL DEFAULT 0,
+                creator_id varchar(32) NOT NULL DEFAULT '',
+                creator varchar(32) NOT NULL DEFAULT '',
+                modifier_id varchar(32) NOT NULL DEFAULT '',
+                modifier varchar(32) NOT NULL DEFAULT '',
+                create_time {dt_default},
+                modify_time {dt_default},
+                PRIMARY KEY (id)
+            )
+            """))
+            if dialect == "mysql":
+                await conn.execute(text("CREATE UNIQUE INDEX uk_mysterious_role_code ON mysterious_role (code)"))
+            log.info("已创建 mysterious_role 表")
+
+        if "mysterious_role_permission" not in tables:
+            await conn.execute(text(f"""
+            CREATE TABLE mysterious_role_permission (
+                id {id_type},
+                role_id bigint NOT NULL DEFAULT 0,
+                permission_code varchar(64) NOT NULL DEFAULT '',
+                PRIMARY KEY (id)
+            )
+            """))
+            if dialect == "mysql":
+                await conn.execute(text("CREATE INDEX idx_role_permission_role_id ON mysterious_role_permission (role_id)"))
+            log.info("已创建 mysterious_role_permission 表")
+
+        user_columns = await conn.run_sync(
+            lambda sync_conn: {
+                col["name"] for col in inspect(sync_conn).get_columns("mysterious_user")
+            }
+        )
+        for name, definitions in _USER_ROLE_COLUMNS.items():
+            if name in user_columns:
+                continue
+            ddl = definitions["mysql"] if dialect == "mysql" else definitions["default"]
+            await conn.execute(text(f"ALTER TABLE mysterious_user ADD COLUMN {name} {ddl}"))
+            log.info("已补齐 mysterious_user.%s 字段", name)
 
 
 async def ensure_scheduled_task_log_table() -> None:

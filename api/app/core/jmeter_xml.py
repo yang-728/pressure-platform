@@ -21,6 +21,11 @@ log = logging.getLogger(__name__)
 
 _STEPPING_TG = "kg.apc.jmeter.threads.SteppingThreadGroup"
 _CONCURRENCY_TG = "com.blazemeter.jmeter.threads.concurrency.ConcurrencyThreadGroup"
+_THREAD_GROUP_TYPE_BY_TAG = {
+    "ThreadGroup": "thread_group",
+    _STEPPING_TG: "stepping_thread_group",
+    _CONCURRENCY_TG: "concurrency_thread_group",
+}
 
 # Debug 模式下都要设为低压力参数，让调试趋近 1 次执行。值全部对齐 Java JMeterUtil
 _DEBUG_THREADGROUP_VALUES = {
@@ -114,6 +119,18 @@ def exist_csv_filename(jmx_path: str, csv_filename: str) -> bool:
     return False
 
 
+def csv_ignore_first_line(jmx_path: str, csv_filename: str) -> bool:
+    """读取匹配 CSVDataSet 的 ignoreFirstLine 配置。未配置时按 JMeter 默认 false 处理。"""
+    tree = _parse(jmx_path)
+    for csv_node in tree.iter("CSVDataSet"):
+        if not _is_enabled(csv_node) or not _csv_matches(csv_node, csv_filename):
+            continue
+        for prop in csv_node.iter():
+            if prop.get("name") == "ignoreFirstLine":
+                return (prop.text or "").strip().lower() == "true"
+    return False
+
+
 def update_csv_filename(jmx_path: str, csv_filename: str, csv_filepath: str) -> None:
     """找所有 testname 或 filename basename 匹配 csv_filename 的 <CSVDataSet>，把 filename 改写为 csv_filepath。
 
@@ -131,6 +148,24 @@ def update_csv_filename(jmx_path: str, csv_filename: str, csv_filepath: str) -> 
     _write(tree, jmx_path)
 
 
+def update_csv_filenames(jmx_path: str, csv_path_by_filename: dict[str, str]) -> None:
+    """批量改写 JMX 中 CSVDataSet 的 filename。key 是原始文件名，value 是目标路径。"""
+    if not csv_path_by_filename:
+        return
+    tree = _parse(jmx_path)
+    for csv_node in tree.iter("CSVDataSet"):
+        if not _is_enabled(csv_node):
+            continue
+        for csv_filename, csv_filepath in csv_path_by_filename.items():
+            if not _csv_matches(csv_node, csv_filename):
+                continue
+            for prop in csv_node.iter():
+                if prop.get("name") == "filename":
+                    prop.text = csv_filepath
+            break
+    _write(tree, jmx_path)
+
+
 def update_jar_classpath(jmx_path: str, jar_dir: str) -> None:
     """找 <TestPlan>/<stringProp name=TestPlan.user_define_classpath>，改写为 jar_dir。
 
@@ -145,46 +180,147 @@ def update_jar_classpath(jmx_path: str, jar_dir: str) -> None:
     _write(tree, jmx_path)
 
 
-def update_run_thread(jmx_path: str, dest_path: str, num_threads: str, ramp_time: str, duration: str) -> None:
+def list_thread_groups(jmx_path: str) -> list[dict[str, str]]:
+    """列出全部线程组，供执行前按线程组配置参数。"""
+    tree = _parse(jmx_path)
+    groups: list[dict[str, str]] = []
+    for el in tree.iter():
+        indexed = _thread_group_key(el, len(groups))
+        if indexed:
+            key, group_type = indexed
+            groups.append({
+                "key": key,
+                "name": el.get("testname") or "",
+                "type": group_type,
+                "enabled": _is_enabled(el),
+            })
+    return groups
+
+
+def _thread_group_key(el: Any, index: int) -> tuple[str, str] | None:
+    group_type = _thread_group_type(el)
+    if not group_type:
+        return None
+    return f"{group_type}:{index}", group_type
+
+
+def _thread_group_type(el: Any) -> str | None:
+    if el.tag == "ThreadGroup" and el.get("testclass") == "ThreadGroup":
+        return _THREAD_GROUP_TYPE_BY_TAG["ThreadGroup"]
+    if el.tag in (_STEPPING_TG, _CONCURRENCY_TG):
+        return _THREAD_GROUP_TYPE_BY_TAG[el.tag]
+    return None
+
+
+def _override_key(item: dict[str, str]) -> str:
+    return str(item.get("key") or item.get("name") or "").strip()
+
+
+def _override_by_key(thread_group_overrides: list[dict] | None) -> dict[str, dict]:
+    overrides: dict[str, dict] = {}
+    for item in thread_group_overrides or []:
+        key = _override_key(item)
+        if key:
+            overrides[key] = item
+    return overrides
+
+
+def _resolve_thread_values(
+    el: Any,
+    key: str,
+    overrides: dict[str, dict],
+    num_threads: str,
+    ramp_time: str,
+    duration: str,
+) -> tuple[str, str, str] | None:
+    override = overrides.get(key) or overrides.get(el.get("testname") or "")
+    if override and override.get("mode") == "fixed":
+        return None
+    if override and override.get("mode") == "custom":
+        return (
+            str(override.get("num_threads") or num_threads),
+            str(override.get("ramp_time") or ramp_time),
+            str(override.get("duration") or duration),
+        )
+    return num_threads, ramp_time, duration
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def update_run_thread(
+    jmx_path: str,
+    dest_path: str,
+    num_threads: str,
+    ramp_time: str,
+    duration: str,
+    thread_group_overrides: list[dict[str, str]] | None = None,
+) -> None:
     """执行压测前动态修改 JMX 线程组参数：并发数、启动时间、运行时间。
 
     支持标准 ThreadGroup / SteppingThreadGroup / ConcurrencyThreadGroup。
     修改后的内容写到 dest_path（原文件保持不变）。
     """
     tree = _parse(jmx_path)
+    overrides = _override_by_key(thread_group_overrides)
+    group_index = 0
     for el in tree.iter():
+        indexed = _thread_group_key(el, group_index)
+        if indexed:
+            key, _group_type = indexed
+            group_index += 1
+        else:
+            key = ""
+        override = overrides.get(key) or overrides.get(el.get("testname") or "")
+        if override and override.get("enabled") is not None:
+            el.set("enabled", "true" if _as_bool(override.get("enabled")) else "false")
         if not _is_enabled(el):
             continue
 
         # 标准 ThreadGroup
         if el.tag == "ThreadGroup" and el.get("testclass") == "ThreadGroup":
+            values = _resolve_thread_values(el, key, overrides, num_threads, ramp_time, duration)
+            if values is None:
+                continue
+            group_num_threads, group_ramp_time, group_duration = values
             _set_named_props(el, {
                 "LoopController.continue_forever": "true",
                 "LoopController.loops": "-1",
-                "ThreadGroup.num_threads": num_threads,
-                "ThreadGroup.ramp_time": ramp_time,
-                "ThreadGroup.duration": duration,
+                "ThreadGroup.num_threads": group_num_threads,
+                "ThreadGroup.ramp_time": group_ramp_time,
+                "ThreadGroup.duration": group_duration,
                 "ThreadGroup.scheduler": "true",
             })
 
         # SteppingThreadGroup
         elif el.tag == _STEPPING_TG:
+            values = _resolve_thread_values(el, key, overrides, num_threads, ramp_time, duration)
+            if values is None:
+                continue
+            group_num_threads, group_ramp_time, group_duration = values
             _set_named_props(el, {
-                "ThreadGroup.num_threads": num_threads,
+                "ThreadGroup.num_threads": group_num_threads,
                 "Threads initial delay": "0",
                 "Start users count burst": "0",
                 "Start users count": "1",
-                "Start users period": ramp_time,
-                "flighttime": duration,
+                "Start users period": group_ramp_time,
+                "flighttime": group_duration,
                 "rampUp": "1",
             })
 
         # ConcurrencyThreadGroup
         elif el.tag == _CONCURRENCY_TG:
+            values = _resolve_thread_values(el, key, overrides, num_threads, ramp_time, duration)
+            if values is None:
+                continue
+            group_num_threads, group_ramp_time, group_duration = values
             _set_named_props(el, {
-                "TargetLevel": num_threads,
-                "RampUp": ramp_time,
-                "Hold": duration,
+                "TargetLevel": group_num_threads,
+                "RampUp": group_ramp_time,
+                "Hold": group_duration,
             })
 
     _write(tree, dest_path)

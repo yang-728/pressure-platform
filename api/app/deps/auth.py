@@ -18,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.codes import Codes
 from app.core.context import UserContext, set_current_user
 from app.core.exceptions import MysteriousException
+from app.core.permissions import DEFAULT_ROLE_CODE
+from app.crud import role as role_crud
 from app.crud import user as user_crud
 from app.db.session import get_db
 
@@ -58,6 +60,14 @@ async def get_current_user_dep(
         )
         raise MysteriousException(Codes.USER_TOKEN_EXPIRE)
 
-    ctx = UserContext(id=user.id, username=user.username, real_name=user.real_name or "")
+    role = await role_crud.get_by_id(db, user.role_id) if user.role_id else None
+    ctx = UserContext(
+        id=user.id,
+        username=user.username,
+        real_name=user.real_name or "",
+        role_id=role.id if role else 0,
+        role_code=role.code if role else DEFAULT_ROLE_CODE,
+        role_name=role.name if role else "普通用户",
+    )
     set_current_user(ctx)
     return ctx

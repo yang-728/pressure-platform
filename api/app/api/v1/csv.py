@@ -13,10 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.codes import Codes
 from app.core.context import UserContext
 from app.core.exceptions import MysteriousException
+from app.core.permissions import PERMISSION_CSV
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
-from app.schemas.csv import CsvQuery, CsvVO
+from app.deps.permission import require_permission
+from app.schemas.csv import CsvQuery, CsvStrategyParam, CsvVO
 from app.services import csv as service
 
 log = logging.getLogger(__name__)
@@ -24,7 +26,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/csv",
     tags=["csv"],
-    dependencies=[Depends(get_current_user_dep)],
+    dependencies=[Depends(get_current_user_dep), Depends(require_permission(PERMISSION_CSV))],
 )
 
 
@@ -139,4 +141,20 @@ async def update_csv(
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.update_csv_content(db, id, content)
+    return success(ok)
+
+
+@router.post(
+    "/updateStrategy/{id}",
+    summary="更新 CSV 分布式读取策略",
+    response_model=Response[bool],
+    response_model_by_alias=True,
+)
+async def update_csv_strategy(
+    id: int,
+    param: CsvStrategyParam,
+    current: UserContext = Depends(get_current_user_dep),
+    db: AsyncSession = Depends(get_db),
+) -> Response[bool]:
+    ok = await service.update_distribution_strategy(db, id, param.distribution_strategy, current)
     return success(ok)

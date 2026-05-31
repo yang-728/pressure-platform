@@ -126,6 +126,84 @@ def test_update_run_thread_standard_threadgroup_uses_duration_until_stopped(tmp_
     assert _find_named_text(tree, "ThreadGroup", "LoopController.loops") == ["-1"]
 
 
+def test_update_run_thread_applies_named_thread_group_overrides(tmp_path: Path) -> None:
+    jmx = _copy_sample(tmp_path)
+    dest = tmp_path / "run.jmx"
+
+    jmeter_xml.update_run_thread(
+        str(jmx),
+        str(dest),
+        "50",
+        "30",
+        "600",
+        [
+            {
+                "name": "Default ThreadGroup",
+                "mode": "custom",
+                "num_threads": "1",
+                "ramp_time": "1",
+                "duration": "60",
+            },
+            {
+                "name": "Concurrency Group",
+                "mode": "fixed",
+            },
+        ],
+    )
+
+    tree = etree.parse(str(dest))
+    assert _find_named_text(tree, "ThreadGroup", "ThreadGroup.num_threads") == ["1"]
+    assert _find_named_text(tree, "ThreadGroup", "ThreadGroup.ramp_time") == ["1"]
+    assert _find_named_text(tree, "ThreadGroup", "ThreadGroup.duration") == ["60"]
+    assert _find_named_text(tree, "com.blazemeter.jmeter.threads.concurrency.ConcurrencyThreadGroup", "TargetLevel") == ["100"]
+    assert _find_named_text(tree, "com.blazemeter.jmeter.threads.concurrency.ConcurrencyThreadGroup", "RampUp") == ["60"]
+    assert _find_named_text(tree, "com.blazemeter.jmeter.threads.concurrency.ConcurrencyThreadGroup", "Hold") == ["300"]
+
+
+def test_list_thread_groups_returns_all_groups_with_key_and_enabled(tmp_path: Path) -> None:
+    jmx = _copy_sample(tmp_path)
+
+    groups = jmeter_xml.list_thread_groups(str(jmx))
+
+    assert groups == [
+        {"key": "thread_group:0", "name": "Default ThreadGroup", "type": "thread_group", "enabled": True},
+        {"key": "stepping_thread_group:1", "name": "Disabled Stepping", "type": "stepping_thread_group", "enabled": False},
+        {"key": "concurrency_thread_group:2", "name": "Concurrency Group", "type": "concurrency_thread_group", "enabled": True},
+    ]
+
+
+def test_update_run_thread_applies_enabled_override_by_key(tmp_path: Path) -> None:
+    jmx = _copy_sample(tmp_path)
+    dest = tmp_path / "run.jmx"
+
+    jmeter_xml.update_run_thread(
+        str(jmx),
+        str(dest),
+        "50",
+        "30",
+        "600",
+        [
+            {"key": "thread_group:0", "name": "Default ThreadGroup", "mode": "global", "enabled": False},
+            {
+                "key": "stepping_thread_group:1",
+                "name": "Disabled Stepping",
+                "mode": "custom",
+                "enabled": True,
+                "num_threads": "2",
+                "ramp_time": "1",
+                "duration": "60",
+            },
+        ],
+    )
+
+    tree = etree.parse(str(dest))
+    assert next(tree.iter("ThreadGroup")).get("enabled") == "false"
+    stepping = next(tree.iter("kg.apc.jmeter.threads.SteppingThreadGroup"))
+    assert stepping.get("enabled") == "true"
+    assert _find_named_text(tree, "kg.apc.jmeter.threads.SteppingThreadGroup", "ThreadGroup.num_threads") == ["2"]
+    assert _find_named_text(tree, "kg.apc.jmeter.threads.SteppingThreadGroup", "flighttime") == ["60"]
+
+
 def test_exist_csv_filename_true(tmp_path: Path) -> None:
     jmx = _copy_sample(tmp_path)
     assert jmeter_xml.exist_csv_filename(str(jmx), "data.csv") is True

@@ -11,7 +11,7 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import jmeter_xml
-from app.core.audit import stamp_create
+from app.core.audit import stamp_create, stamp_modify
 from app.core.codes import Codes
 from app.core.context import UserContext
 from app.core.enums import JMeterScript
@@ -25,6 +25,9 @@ from app.schemas.csv import CsvQuery, CsvVO
 from app.services import node as node_service
 
 log = logging.getLogger(__name__)
+CSV_DISTRIBUTION_SHARED = "shared"
+CSV_DISTRIBUTION_SPLIT_BY_SLAVE = "split_by_slave"
+_CSV_DISTRIBUTION_STRATEGIES = {CSV_DISTRIBUTION_SHARED, CSV_DISTRIBUTION_SPLIT_BY_SLAVE}
 
 
 def _check_csv_name(name: str | None) -> None:
@@ -35,6 +38,13 @@ def _check_csv_name(name: str | None) -> None:
 
 def _to_vo(obj: Csv) -> CsvVO:
     return CsvVO.model_validate(obj)
+
+
+def _check_distribution_strategy(strategy: str | None) -> str:
+    value = (strategy or "").strip() or CSV_DISTRIBUTION_SHARED
+    if value not in _CSV_DISTRIBUTION_STRATEGIES:
+        raise MysteriousException(Codes.PARAM_WRONG, message=f"不支持的参数文件分布式策略: {value}")
+    return value
 
 
 async def upload_csv(
@@ -163,4 +173,14 @@ async def update_csv_content(db: AsyncSession, id: int, content: str) -> bool:
 
     # 同步到所有 enabled slave
     await node_service.scp_to_enabled_slaves(db, filepath, obj.csv_dir)
+    return True
+
+
+async def update_distribution_strategy(db: AsyncSession, id: int, strategy: str, user: UserContext) -> bool:
+    obj = await csv_crud.get_by_id(db, id)
+    if obj is None:
+        raise MysteriousException(Codes.FILE_NOT_EXIST)
+    obj.distribution_strategy = _check_distribution_strategy(strategy)
+    stamp_modify(obj, user)
+    await csv_crud.update(db, obj)
     return True

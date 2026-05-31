@@ -24,11 +24,13 @@ from sqlalchemy.pool import StaticPool
 
 # 触发 ORM 模型注册到 Base.metadata
 import app.models  # noqa: F401
+from app.core.permissions import ADMIN_ROLE_CODE, ALL_PERMISSION_CODES
 from app.db.base import Base
 from app.db.redis import get_redis
 from app.db.session import get_db
 from app.main import app
 from app.models.config import Config
+from app.models.role import Role, RolePermission
 from app.models.user import User
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -126,6 +128,11 @@ async def auth_client() -> AsyncIterator[AsyncClient]:
     # 用 Shanghai 本地时间，对齐 deps/auth.py 里的时间比较
     now = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
     async with TestSessionLocal() as session:
+        role = Role(name="超级管理员", code=ADMIN_ROLE_CODE, description="超级管理员", builtin=1)
+        session.add(role)
+        await session.flush()
+        for permission in ALL_PERMISSION_CODES:
+            session.add(RolePermission(role_id=role.id, permission_code=permission))
         user = User(
             username="test_admin",
             password="bypass-bcrypt-in-fixture",
@@ -133,6 +140,7 @@ async def auth_client() -> AsyncIterator[AsyncClient]:
             token=token,
             effect_time=now,
             expire_time=now + timedelta(hours=12),
+            role_id=role.id,
         )
         session.add(user)
         await session.commit()

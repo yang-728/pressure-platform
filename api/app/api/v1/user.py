@@ -10,10 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit_helper import record as audit_record
 from app.core.context import UserContext
+from app.core.permissions import PERMISSION_USER
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
-from app.schemas.user import UpdatePasswordParam, UserParam, UserQuery, UserVO
+from app.deps.permission import require_permission
+from app.schemas.user import CurrentUserVO, UpdatePasswordParam, UserParam, UserQuery, UserVO
 from app.services import user as user_service
 
 router = APIRouter(prefix="/user", tags=["user"])
@@ -27,6 +29,7 @@ router = APIRouter(prefix="/user", tags=["user"])
 )
 async def add_user(
     param: UserParam,
+    current: UserContext = Depends(require_permission(PERMISSION_USER)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[int]:
     user_id = await user_service.add_user(db, param)
@@ -41,7 +44,7 @@ async def add_user(
 )
 async def delete_user(
     id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_USER)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await user_service.delete_user(db, id, current)
@@ -59,7 +62,7 @@ async def delete_user(
 async def update_user(
     id: int,
     param: UserParam,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_USER)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await user_service.update_user(db, id, param, current)
@@ -74,9 +77,10 @@ async def update_user(
 )
 async def get_by_id(
     id: int,
+    current: UserContext = Depends(get_current_user_dep),
     db: AsyncSession = Depends(get_db),
 ) -> Response[UserVO | None]:
-    user = await user_service.get_by_id(db, id)
+    user = await user_service.get_by_id(db, id, current)
     return success(user)
 
 
@@ -102,10 +106,24 @@ async def login(
 )
 async def list_users(
     query: UserQuery = Depends(),
+    current: UserContext = Depends(require_permission(PERMISSION_USER)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[PageVO[UserVO]]:
     page = await user_service.get_user_list(db, query)
     return success(page)
+
+
+@router.get(
+    "/current",
+    summary="当前登录用户信息",
+    response_model=Response[CurrentUserVO],
+    response_model_by_alias=True,
+)
+async def current_user(
+    current: UserContext = Depends(get_current_user_dep),
+    db: AsyncSession = Depends(get_db),
+) -> Response[CurrentUserVO]:
+    return success(await user_service.get_current_user_info(db, current))
 
 
 @router.post(

@@ -56,6 +56,11 @@ async def count(
     return (await db.execute(stmt)).scalar_one() or 0
 
 
+async def count_by_role_id(db: AsyncSession, role_id: int) -> int:
+    stmt = select(func.count()).select_from(User).where(User.role_id == role_id)
+    return (await db.execute(stmt)).scalar_one() or 0
+
+
 async def list_users(
     db: AsyncSession,
     username: str | None,
@@ -69,4 +74,9 @@ async def list_users(
     if real_name is not None:
         stmt = stmt.where(User.real_name.like(f"%{real_name}%"))
     stmt = stmt.order_by(User.effect_time.desc()).offset(offset).limit(limit)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_by_role_id(db: AsyncSession, role_id: int) -> list[User]:
+    stmt = select(User).where(User.role_id == role_id)
     return list((await db.execute(stmt)).scalars().all())

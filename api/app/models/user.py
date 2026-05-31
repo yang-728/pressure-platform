@@ -21,6 +21,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(128), default="", server_default="")
     password: Mapped[str] = mapped_column(String(128), default="", server_default="")
     real_name: Mapped[str] = mapped_column(String(128), default="", server_default="")
+    role_id: Mapped[int] = mapped_column(ID_TYPE, default=0, server_default="0")
     token: Mapped[str] = mapped_column(String(128), default="", server_default="")
     effect_time: Mapped[datetime] = mapped_column(
         DateTime,

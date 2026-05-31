@@ -20,6 +20,7 @@ from app.api.v1.jar import router as jar_router
 from app.api.v1.jmx import router as jmx_router
 from app.api.v1.node import router as node_router
 from app.api.v1.report import router as report_router
+from app.api.v1.role import router as role_router
 from app.api.v1.scheduled_task import router as scheduled_task_router
 from app.api.v1.testcase import router as testcase_router
 from app.api.v1.user import router as user_router
@@ -65,11 +66,15 @@ async def lifespan(app: FastAPI):
 
     from app.db.schema import (
         ensure_ai_generation_tables,
+        ensure_csv_distribution_columns,
+        ensure_rbac_schema,
         ensure_report_snapshot_columns,
         ensure_scheduled_task_log_table,
     )
     await ensure_ai_generation_tables()
     await ensure_report_snapshot_columns()
+    await ensure_csv_distribution_columns()
+    await ensure_rbac_schema()
     await ensure_scheduled_task_log_table()
 
     # 初始化：创建 admin 用户（如不存在）
@@ -136,6 +141,7 @@ def create_app() -> FastAPI:
     app.include_router(csv_router)
     app.include_router(jar_router)
     app.include_router(report_router)
+    app.include_router(role_router)
     app.include_router(scheduled_task_router)
     app.include_router(audit_log_router)
 

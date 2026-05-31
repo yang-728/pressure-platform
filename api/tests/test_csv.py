@@ -133,6 +133,39 @@ async def test_list_csv_and_get_by_testcase(
     items = by_case.json()["data"]
     assert len(items) == 1
     assert items[0]["srcName"] == "data.csv"
+    assert items[0]["distributionStrategy"] == "shared"
+
+
+@pytest.mark.asyncio
+async def test_update_csv_distribution_strategy(
+    auth_client: AsyncClient,
+    data_home: Path,
+    sample_jmx_bytes: bytes,
+    db,
+) -> None:
+    from sqlalchemy import select
+
+    from app.models.csv import Csv
+
+    case_id = await _create_testcase_with_jmx(auth_client, "c_strategy", sample_jmx_bytes)
+    await auth_client.post(
+        f"/csv/upload/{case_id}",
+        files={"csvFile": ("data.csv", b"a,b\n1,2\n", "text/csv")},
+    )
+    obj = (await db.execute(select(Csv).where(Csv.test_case_id == case_id))).scalar_one()
+    old_modify_time = obj.modify_time
+
+    resp = await auth_client.post(
+        f"/csv/updateStrategy/{obj.id}",
+        json={"distributionStrategy": "split_by_slave"},
+    )
+
+    assert resp.json()["code"] == 0
+    await db.refresh(obj)
+    assert obj.distribution_strategy == "split_by_slave"
+    assert obj.modify_time > old_modify_time
+    by_case = await auth_client.get(f"/csv/getByTestCaseId?testCaseId={case_id}")
+    assert by_case.json()["data"][0]["distributionStrategy"] == "split_by_slave"
 
 
 @pytest.mark.asyncio

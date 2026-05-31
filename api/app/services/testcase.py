@@ -54,9 +54,10 @@ from app.schemas.testcase import (
     TestCaseVO,
 )
 from app.services import config as config_service
+from app.services import csv as csv_service
 from app.services import jmeter_runner
 from app.services import report as report_service
-from app.core.jmeter_xml import update_run_thread
+from app.core.jmeter_xml import csv_ignore_first_line, list_thread_groups, update_csv_filenames, update_run_thread
 
 log = logging.getLogger(__name__)
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -354,6 +355,8 @@ async def _sync_case_dependencies_to_slaves(
     for slave in slaves:
         ssh = SSHClient(slave.host, slave.port, slave.username, slave.password)
         for csv_obj in csvs:
+            if csv_obj.distribution_strategy == csv_service.CSV_DISTRIBUTION_SPLIT_BY_SLAVE:
+                continue
             local_path = csv_obj.csv_dir + csv_obj.dst_name
             try:
                 await ssh.scp_file(local_path, csv_obj.csv_dir, raise_on_error=True)
@@ -373,6 +376,118 @@ async def _sync_case_dependencies_to_slaves(
                     Codes.FAIL,
                     message=f"压力机「{slave.host}」同步JAR文件失败: {jar_obj.src_name}",
                 ) from e
+
+
+async def _prepare_split_csv_files(
+    csvs: list[Csv],
+    slaves: list,
+    report_root: str,
+    run_jmx_path: str,
+) -> None:
+    """对标记为按压力机切片的 CSV/DAT 生成运行时切片，并同步到本次 slave。
+
+    JMX 发给所有 slave 的内容相同，所以每台 slave 使用同一个运行时绝对路径，
+    但该路径上的文件内容按 slave 不同。
+    """
+    split_csvs = [
+        csv_obj for csv_obj in csvs
+        if csv_obj.distribution_strategy == csv_service.CSV_DISTRIBUTION_SPLIT_BY_SLAVE
+    ]
+    if not split_csvs or not slaves:
+        return
+
+    runtime_csv_dir = str(Path(report_root).resolve() / "runtime_csv")
+    Path(runtime_csv_dir).mkdir(parents=True, exist_ok=True)
+    jmx_rewrites: dict[str, str] = {}
+
+    for csv_obj in split_csvs:
+        source_path = Path(csv_obj.csv_dir) / csv_obj.dst_name
+        if not source_path.exists():
+            raise MysteriousException(Codes.FILE_NOT_EXIST, message=f"参数化文件不存在: {csv_obj.src_name}")
+
+        remote_runtime_path = str(Path(runtime_csv_dir) / csv_obj.dst_name)
+        remote_runtime_dir = str(Path(remote_runtime_path).parent)
+        jmx_rewrites[csv_obj.src_name] = remote_runtime_path
+
+        chunks = _split_csv_lines_for_slaves(
+            source_path,
+            len(slaves),
+            keep_first_line=csv_ignore_first_line(run_jmx_path, csv_obj.src_name),
+        )
+        for index, slave in enumerate(slaves):
+            chunk = chunks[index % len(chunks)]
+            local_slice_dir = Path(runtime_csv_dir) / _safe_path_part(slave.host)
+            local_slice_dir.mkdir(parents=True, exist_ok=True)
+            tmp_path = str(local_slice_dir / csv_obj.dst_name)
+            Path(tmp_path).write_bytes(chunk)
+            try:
+                ssh = SSHClient(slave.host, slave.port, slave.username, slave.password)
+                await ssh.scp_file(tmp_path, remote_runtime_dir, raise_on_error=True)
+            except MysteriousException as e:
+                log.warning("执行前同步切片 CSV 到 slave %s 失败: %s", slave.host, csv_obj.src_name)
+                raise MysteriousException(
+                    Codes.FAIL,
+                    message=f"压力机「{slave.host}」同步切片参数文件失败: {csv_obj.src_name}",
+                ) from e
+            log.info(
+                "同步切片参数文件: csv=%s slave=%s index=%s/%s remote=%s bytes=%s",
+                csv_obj.src_name,
+                slave.host,
+                index + 1,
+                len(slaves),
+                remote_runtime_path,
+                len(chunk),
+            )
+
+    update_csv_filenames(run_jmx_path, jmx_rewrites)
+
+
+def _split_csv_lines_for_slaves(source_path: Path, slave_count: int, *, keep_first_line: bool) -> list[bytes]:
+    data = source_path.read_bytes()
+    lines = data.splitlines(keepends=True)
+    if not lines:
+        return [b"" for _ in range(max(slave_count, 1))]
+
+    header = lines[0] if keep_first_line and len(lines) > 1 else b""
+    rows = lines[1:] if keep_first_line and len(lines) > 1 else lines
+    if not rows:
+        return [header for _ in range(max(slave_count, 1))]
+
+    # 按行取模分配，能保留原始文件顺序的同时尽量均匀。
+    return [header + b"".join(rows[i::slave_count]) for i in range(slave_count)]
+
+
+def _safe_path_part(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
+
+
+def _prepare_thread_group_overrides(param: RunParam, slave_count: int) -> list[dict]:
+    overrides: list[dict] = []
+    for item in param.thread_group_overrides:
+        data = item.model_dump(by_alias=False)
+        if data.get("mode") == "custom" and slave_count > 1 and data.get("num_threads") not in (None, ""):
+            data["num_threads"] = str(math.ceil(int(data["num_threads"]) / slave_count))
+        overrides.append(data)
+    return overrides
+
+
+def _validate_thread_group_overrides(jmx_path: str, overrides: list[dict]) -> None:
+    if not overrides:
+        return
+    groups_by_key = {item["key"]: item for item in list_thread_groups(jmx_path)}
+    for override in overrides:
+        key = str(override.get("key") or "").strip()
+        if not key:
+            continue
+        current = groups_by_key.get(key)
+        if current is None:
+            raise MysteriousException(Codes.FAIL, message=f"线程组配置已过期，请重新打开执行配置: {key}")
+        name = str(override.get("name") or "").strip()
+        if name and name != current.get("name"):
+            raise MysteriousException(
+                Codes.FAIL,
+                message=f"线程组配置已过期，请重新打开执行配置: {name} -> {current.get('name')}",
+            )
 
 
 async def _sync_dependency_files_to_slave(slave, files: list[tuple[str, str, str, str]]) -> None:
@@ -557,12 +672,15 @@ async def run_testcase(db: AsyncSession, id: int, param: RunParam, user: UserCon
     ts = _ts_now()
     run_jmx_name = f"run_{ts}_{id}.jmx"
     run_jmx_path = jmx.jmx_dir + run_jmx_name
+    thread_group_overrides = _prepare_thread_group_overrides(param, slave_count)
+    _validate_thread_group_overrides(src_jmx_path, thread_group_overrides)
     update_run_thread(
         src_jmx_path,
         run_jmx_path,
         num_threads,
         ramp_time,
         duration,
+        thread_group_overrides,
     )
 
     # 清理旧 run_*.jmx，只保留最近 5 个
@@ -574,6 +692,9 @@ async def run_testcase(db: AsyncSession, id: int, param: RunParam, user: UserCon
     artifact_dir = str(Path(data_dir).resolve().parent / "artifacts")
     if is_init_artifact:
         Path(artifact_dir).mkdir(parents=True, exist_ok=True)
+    if healthy_slaves:
+        csvs = await csv_crud.get_by_test_case_id(db, id)
+        await _prepare_split_csv_files(csvs, healthy_slaves, str(Path(data_dir).resolve().parent), run_jmx_path)
     actual_slave_count = max(1, slave_count)
     _write_run_meta(
         data_dir,
@@ -643,6 +764,19 @@ async def run_testcase(db: AsyncSession, id: int, param: RunParam, user: UserCon
         log_file_path=log_path,
     )
     return True
+
+
+async def list_run_thread_groups(db: AsyncSession, id: int) -> list[dict[str, str]]:
+    testcase = await crud.get_by_id(db, id)
+    if testcase is None:
+        raise MysteriousException(Codes.TESTCASE_NOT_EXIST)
+    jmx = await jmx_crud.get_by_test_case_id(db, id)
+    if jmx is None:
+        raise MysteriousException(Codes.JMX_NOT_EXIST)
+    jmx_path = jmx.jmx_dir + jmx.dst_name
+    if not Path(jmx_path).exists():
+        raise MysteriousException(Codes.FILE_NOT_EXIST)
+    return list_thread_groups(jmx_path)
 
 
 async def stop_testcase(db: AsyncSession, id: int, user: UserContext) -> bool:

@@ -13,9 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.codes import Codes
 from app.core.context import UserContext
 from app.core.exceptions import MysteriousException
+from app.core.permissions import PERMISSION_CASE_GENERATION
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
+from app.deps.permission import require_permission
 from app.schemas.ai_generation import (
     AiGenerationArtifactDownloadRequest,
     AiGenerationArtifactVO,
@@ -28,7 +30,7 @@ from app.services import ai_generation as service
 router = APIRouter(
     prefix="/ai-generation",
     tags=["ai-generation"],
-    dependencies=[Depends(get_current_user_dep)],
+    dependencies=[Depends(get_current_user_dep), Depends(require_permission(PERMISSION_CASE_GENERATION))],
 )
 
 

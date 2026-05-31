@@ -80,6 +80,28 @@ class RunParam(CamelModel):
     duration: str = "60"
     slave_count: int = 1  # 期望使用的 slave 数量，默认 1
     region: str = ""  # 目标区域，为空则不限区域
+    thread_group_overrides: list["ThreadGroupRunOverride"] = Field(default_factory=list)
+
+
+class ThreadGroupRunOverride(CamelModel):
+    """单次执行的线程组参数覆盖。mode=global 跟随全局，custom 自定义，fixed 保留 JMX 原值。"""
+
+    key: str | None = None
+    name: str
+    enabled: bool | None = None
+    mode: str = "global"
+    num_threads: str | None = None
+    ramp_time: str | None = None
+    duration: str | None = None
+
+
+class ThreadGroupRunVO(CamelModel):
+    """JMX 中可配置的启用线程组。"""
+
+    key: str = ""
+    name: str = ""
+    type: str = ""
+    enabled: bool = True
 
 
 class JMeterResultVO(CamelModel):

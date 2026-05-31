@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import UserContext
+from app.core.permissions import PERMISSION_AUDIT
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
+from app.deps.permission import require_permission
 from app.schemas.audit_log import AuditLogQuery, AuditLogVO
 from app.services import audit_log as service
 
@@ -27,6 +29,7 @@ router = APIRouter(
 )
 async def get_audit_log_list(
     query: AuditLogQuery = Depends(),
+    current: UserContext = Depends(require_permission(PERMISSION_AUDIT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[PageVO[AuditLogVO]]:
     page = await service.get_log_list(db, query)

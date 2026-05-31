@@ -13,9 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.codes import Codes
 from app.core.context import UserContext
 from app.core.exceptions import MysteriousException
+from app.core.permissions import PERMISSION_JMX
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
+from app.deps.permission import require_permission
 from app.schemas.jmx import JmxQuery, JmxVO
 from app.services import jmx as service
 
@@ -24,7 +26,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/jmx",
     tags=["jmx"],
-    dependencies=[Depends(get_current_user_dep)],
+    dependencies=[Depends(get_current_user_dep), Depends(require_permission(PERMISSION_JMX))],
 )
 
 

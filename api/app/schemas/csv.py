@@ -10,7 +10,12 @@ class CsvParam(CamelModel):
     dst_name: str | None = None
     description: str | None = None
     csv_dir: str | None = None
+    distribution_strategy: str | None = None
     test_case_id: int | None = None
+
+
+class CsvStrategyParam(CamelModel):
+    distribution_strategy: str
 
 
 class CsvVO(BaseVO):
@@ -18,6 +23,7 @@ class CsvVO(BaseVO):
     dst_name: str = ""
     description: str = ""
     csv_dir: str = ""
+    distribution_strategy: str = "shared"
     test_case_id: int = 0
 
 

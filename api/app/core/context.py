@@ -13,6 +13,9 @@ class UserContext(BaseModel):
     id: int
     username: str
     real_name: str = ""
+    role_id: int = 0
+    role_code: str = "user"
+    role_name: str = "普通用户"
 
 
 _current_user_var: ContextVar[UserContext | None] = ContextVar("current_user", default=None)

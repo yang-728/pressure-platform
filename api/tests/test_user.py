@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import UserContext
 from app.core.response import success
+from app.core.security import hash_password
 from app.deps.auth import get_current_user_dep
 from app.main import app
 from app.models.user import User
@@ -33,14 +34,29 @@ async def _whoami(current: UserContext = Depends(get_current_user_dep)) -> Any:
 app.add_api_route("/_test/whoami", _whoami, methods=["GET"], include_in_schema=False)
 
 
+async def _create_user(db: AsyncSession, username: str, password: str = "Password123", real_name: str = "") -> User:
+    now = datetime.now()
+    user = User(
+        username=username,
+        password=hash_password(password),
+        real_name=real_name,
+        effect_time=now,
+        expire_time=now + timedelta(hours=12),
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
 # ---------------------------------------------------------------------------
 # /user/add
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_add_user_success(client: AsyncClient, db: AsyncSession) -> None:
-    resp = await client.post(
+async def test_add_user_success(auth_client: AsyncClient, db: AsyncSession) -> None:
+    resp = await auth_client.post(
         "/user/add",
-        json={"username": "alice", "password": "secret", "realName": "爱丽丝"},
+        json={"username": "alice", "password": "Secret123", "realName": "爱丽丝"},
     )
     body = resp.json()
     assert body["code"] == 0
@@ -52,16 +68,16 @@ async def test_add_user_success(client: AsyncClient, db: AsyncSession) -> None:
     user = (await db.execute(select(User).where(User.username == "alice"))).scalar_one()
     assert user.real_name == "爱丽丝"
     # 密码已 bcrypt 加密，不是明文
-    assert user.password != "secret"
+    assert user.password != "Secret123"
     assert user.password.startswith("$2")  # bcrypt 标识前缀
     # token 已生成
     assert len(user.token) >= 32
 
 
 @pytest.mark.asyncio
-async def test_add_user_duplicate(client: AsyncClient) -> None:
-    await client.post("/user/add", json={"username": "bob", "password": "p"})
-    resp = await client.post("/user/add", json={"username": "bob", "password": "p"})
+async def test_add_user_duplicate(auth_client: AsyncClient) -> None:
+    await auth_client.post("/user/add", json={"username": "bob", "password": "Password123"})
+    resp = await auth_client.post("/user/add", json={"username": "bob", "password": "Password123"})
     body = resp.json()
     assert body["code"] == 1004  # USER_EXIST
     assert body["success"] is False
@@ -69,9 +85,9 @@ async def test_add_user_duplicate(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_add_user_missing_param(client: AsyncClient) -> None:
+async def test_add_user_missing_param(auth_client: AsyncClient) -> None:
     # 缺 password
-    resp = await client.post("/user/add", json={"username": "carol"})
+    resp = await auth_client.post("/user/add", json={"username": "carol"})
     body = resp.json()
     assert body["code"] == 1003  # PARAM_MISSING
 
@@ -80,11 +96,8 @@ async def test_add_user_missing_param(client: AsyncClient) -> None:
 # /user/login
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_login_success(client: AsyncClient) -> None:
-    await client.post(
-        "/user/add",
-        json={"username": "dave", "password": "hunter2", "realName": "Dave"},
-    )
+async def test_login_success(client: AsyncClient, db: AsyncSession) -> None:
+    await _create_user(db, "dave", "hunter2", "Dave")
     resp = await client.post("/user/login", json={"username": "dave", "password": "hunter2"})
     body = resp.json()
     assert body["code"] == 0
@@ -94,8 +107,8 @@ async def test_login_success(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_login_wrong_password(client: AsyncClient) -> None:
-    await client.post("/user/add", json={"username": "eve", "password": "correct"})
+async def test_login_wrong_password(client: AsyncClient, db: AsyncSession) -> None:
+    await _create_user(db, "eve", "correct")
     resp = await client.post("/user/login", json={"username": "eve", "password": "wrong"})
     body = resp.json()
     assert body["code"] == 1006  # USER_PASSWORD_ERROR
@@ -112,19 +125,20 @@ async def test_login_user_not_exist(client: AsyncClient) -> None:
 # /user/getById
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_get_by_id_returns_camelcase(client: AsyncClient) -> None:
-    add_resp = await client.post(
+async def test_get_by_id_returns_camelcase_and_masks_password(auth_client: AsyncClient) -> None:
+    add_resp = await auth_client.post(
         "/user/add",
-        json={"username": "frank", "password": "p", "realName": "弗兰克"},
+        json={"username": "frank", "password": "Password123", "realName": "弗兰克"},
     )
     user_id = add_resp.json()["data"]
 
-    resp = await client.get(f"/user/getById/{user_id}")
+    resp = await auth_client.get(f"/user/getById/{user_id}")
     body = resp.json()
     assert body["code"] == 0
     data = body["data"]
     assert data["id"] == user_id
     assert data["username"] == "frank"
+    assert data["password"] == "******"
     # 关键：camelCase
     assert data["realName"] == "弗兰克"
     assert "real_name" not in data
@@ -136,8 +150,30 @@ async def test_get_by_id_returns_camelcase(client: AsyncClient) -> None:
 async def test_get_by_id_not_found(client: AsyncClient) -> None:
     resp = await client.get("/user/getById/999999")
     body = resp.json()
+    assert body["code"] == 1007
+
+
+@pytest.mark.asyncio
+async def test_get_by_id_not_found_for_logged_in_user(auth_client: AsyncClient) -> None:
+    resp = await auth_client.get("/user/getById/999999")
+    body = resp.json()
     assert body["code"] == 0
     assert body["data"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_by_id_forbidden_for_other_user(auth_client: AsyncClient, client: AsyncClient) -> None:
+    await auth_client.post("/user/add", json={"username": "viewer", "password": "Password123"})
+    target_resp = await auth_client.post("/user/add", json={"username": "target", "password": "Password123"})
+    target_id = target_resp.json()["data"]
+    login_resp = await client.post("/user/login", json={"username": "viewer", "password": "Password123"})
+    token = login_resp.json()["data"]
+
+    resp = await client.get(f"/user/getById/{target_id}", headers={"token": token})
+
+    body = resp.json()
+    assert body["code"] != 0
+    assert "无权" in body["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -145,14 +181,14 @@ async def test_get_by_id_not_found(client: AsyncClient) -> None:
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_update_password_refreshes_token(
-    client: AsyncClient, db: AsyncSession
+    auth_client: AsyncClient, client: AsyncClient, db: AsyncSession
 ) -> None:
     """验证 /user/updatePassword 修改密码后 token 刷新，且能用新密码登录"""
-    await client.post(
+    await auth_client.post(
         "/user/add",
-        json={"username": "gina", "password": "old_pw", "realName": "Gina"},
+        json={"username": "gina", "password": "Oldpass123", "realName": "Gina"},
     )
-    login_resp = await client.post("/user/login", json={"username": "gina", "password": "old_pw"})
+    login_resp = await client.post("/user/login", json={"username": "gina", "password": "Oldpass123"})
     token = login_resp.json()["data"]
 
     user_before = (await db.execute(select(User).where(User.username == "gina"))).scalar_one()
@@ -161,7 +197,7 @@ async def test_update_password_refreshes_token(
     # 通过 /user/updatePassword 修改密码
     update_resp = await client.post(
         "/user/updatePassword",
-        json={"oldPassword": "old_pw", "newPassword": "new_pw"},
+        json={"oldPassword": "Oldpass123", "newPassword": "Newpass123"},
         headers={"token": token},
     )
     assert update_resp.json()["code"] == 0
@@ -174,54 +210,69 @@ async def test_update_password_refreshes_token(
     assert user_after.token != old_token
 
     # 用新密码能登录
-    login_resp = await client.post("/user/login", json={"username": "gina", "password": "new_pw"})
+    login_resp = await client.post("/user/login", json={"username": "gina", "password": "Newpass123"})
     assert login_resp.json()["code"] == 0, login_resp.json()
 
     # 用旧密码不能登录
-    bad_login = await client.post("/user/login", json={"username": "gina", "password": "old_pw"})
+    bad_login = await client.post("/user/login", json={"username": "gina", "password": "Oldpass123"})
     assert bad_login.json()["code"] == 1006
 
 
 @pytest.mark.asyncio
-async def test_update_user_info(client: AsyncClient) -> None:
+async def test_update_user_info(auth_client: AsyncClient, client: AsyncClient) -> None:
     """验证 /user/update/{id} 可修改 username/real_name"""
-    add_resp = await client.post("/user/add", json={"username": "gina", "password": "p", "realName": "Gina"})
+    add_resp = await auth_client.post("/user/add", json={"username": "gina", "password": "Password123", "realName": "Gina"})
     user_id = add_resp.json()["data"]
 
-    login_resp = await client.post("/user/login", json={"username": "gina", "password": "p"})
+    login_resp = await client.post("/user/login", json={"username": "gina", "password": "Password123"})
     token = login_resp.json()["data"]
 
-    resp = await client.post(
+    resp = await auth_client.post(
         f"/user/update/{user_id}",
         json={"realName": "吉娜"},
-        headers={"token": token},
     )
     assert resp.json()["data"] is True
 
-    get_resp = await client.get(f"/user/getById/{user_id}")
+    get_resp = await client.get(f"/user/getById/{user_id}", headers={"token": token})
     assert get_resp.json()["data"]["realName"] == "吉娜"
 
 
 @pytest.mark.asyncio
-async def test_update_user_not_exist(client: AsyncClient) -> None:
+async def test_update_user_rejects_duplicate_username(auth_client: AsyncClient, db: AsyncSession) -> None:
+    first_resp = await auth_client.post(
+        "/user/add",
+        json={"username": "rename_source", "password": "Password123"},
+    )
+    first_id = first_resp.json()["data"]
+    await auth_client.post("/user/add", json={"username": "rename_target", "password": "Password123"})
+
+    resp = await auth_client.post(f"/user/update/{first_id}", json={"username": "rename_target"})
+
+    body = resp.json()
+    assert body["code"] == 1004
+    assert "用户已存在" in body["message"]
+    user = (await db.execute(select(User).where(User.id == first_id))).scalar_one()
+    assert user.username == "rename_source"
+
+
+@pytest.mark.asyncio
+async def test_update_user_not_exist(auth_client: AsyncClient) -> None:
     # 需要先登录获取 token，因为 update_user 现在需要鉴权
-    await client.post("/user/add", json={"username": " updater ", "password": "p"})
-    login_resp = await client.post("/user/login", json={"username": " updater ", "password": "p"})
-    token = login_resp.json()["data"]
-    resp = await client.post("/user/update/999999", json={"realName": "无"}, headers={"token": token})
+    await auth_client.post("/user/add", json={"username": " updater ", "password": "Password123"})
+    resp = await auth_client.post("/user/update/999999", json={"realName": "无"})
     assert resp.json()["data"] is False
 
 
 @pytest.mark.asyncio
-async def test_update_user_forbidden_for_other_user(client: AsyncClient) -> None:
+async def test_update_user_forbidden_for_other_user(auth_client: AsyncClient, client: AsyncClient) -> None:
     """普通用户不能修改其他用户的信息"""
     # 创建用户 A
-    await client.post("/user/add", json={"username": "user_a", "password": "p", "realName": "A"})
-    a_login = await client.post("/user/login", json={"username": "user_a", "password": "p"})
+    await auth_client.post("/user/add", json={"username": "user_a", "password": "Password123", "realName": "A"})
+    a_login = await client.post("/user/login", json={"username": "user_a", "password": "Password123"})
     a_token = a_login.json()["data"]
 
     # 创建用户 B
-    b_resp = await client.post("/user/add", json={"username": "user_b", "password": "p", "realName": "B"})
+    b_resp = await auth_client.post("/user/add", json={"username": "user_b", "password": "Password123", "realName": "B"})
     b_id = b_resp.json()["data"]
 
     # A 尝试修改 B
@@ -234,15 +285,46 @@ async def test_update_user_forbidden_for_other_user(client: AsyncClient) -> None
     assert "无权" in resp.json()["message"]
 
 
+@pytest.mark.asyncio
+async def test_add_user_rejects_unknown_role_id(auth_client: AsyncClient) -> None:
+    resp = await auth_client.post(
+        "/user/add",
+        json={"username": "bad_role_user", "password": "Password123", "roleId": 999999},
+    )
+
+    body = resp.json()
+    assert body["code"] == 1002
+    assert "角色不存在" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_update_user_rejects_unknown_role_id(auth_client: AsyncClient, db: AsyncSession) -> None:
+    add_resp = await auth_client.post(
+        "/user/add",
+        json={"username": "role_update_user", "password": "Password123"},
+    )
+    user_id = add_resp.json()["data"]
+    before = (await db.execute(select(User).where(User.id == user_id))).scalar_one()
+    original_role_id = before.role_id
+
+    resp = await auth_client.post(f"/user/update/{user_id}", json={"roleId": 999999})
+
+    body = resp.json()
+    assert body["code"] == 1002
+    assert "角色不存在" in body["message"]
+    await db.refresh(before)
+    assert before.role_id == original_role_id
+
+
 # ---------------------------------------------------------------------------
 # /user/list
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_list_users_paginated_and_password_masked(client: AsyncClient) -> None:
+async def test_list_users_paginated_and_password_masked(auth_client: AsyncClient) -> None:
     for name in ["u1", "u2", "u3"]:
-        await client.post("/user/add", json={"username": name, "password": "p", "realName": name.upper()})
+        await auth_client.post("/user/add", json={"username": name, "password": "Password123", "realName": name.upper()})
 
-    resp = await client.get("/user/list?page=1&size=10")
+    resp = await auth_client.get("/user/list?page=1&size=10&username=u")
     body = resp.json()
     assert body["code"] == 0
     page = body["data"]
@@ -257,12 +339,12 @@ async def test_list_users_paginated_and_password_masked(client: AsyncClient) -> 
 
 
 @pytest.mark.asyncio
-async def test_list_users_search_by_username(client: AsyncClient) -> None:
-    await client.post("/user/add", json={"username": "search_alpha", "password": "p"})
-    await client.post("/user/add", json={"username": "search_beta", "password": "p"})
-    await client.post("/user/add", json={"username": "other", "password": "p"})
+async def test_list_users_search_by_username(auth_client: AsyncClient) -> None:
+    await auth_client.post("/user/add", json={"username": "search_alpha", "password": "Password123"})
+    await auth_client.post("/user/add", json={"username": "search_beta", "password": "Password123"})
+    await auth_client.post("/user/add", json={"username": "other", "password": "Password123"})
 
-    resp = await client.get("/user/list?page=1&size=10&username=search")
+    resp = await auth_client.get("/user/list?page=1&size=10&username=search")
     body = resp.json()
     assert body["code"] == 0
     assert body["data"]["total"] == 2
@@ -272,43 +354,31 @@ async def test_list_users_search_by_username(client: AsyncClient) -> None:
 # /user/delete
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_delete_user(client: AsyncClient) -> None:
-    add_resp = await client.post("/user/add", json={"username": "to_delete", "password": "p"})
+async def test_delete_user(auth_client: AsyncClient, client: AsyncClient) -> None:
+    add_resp = await auth_client.post("/user/add", json={"username": "to_delete", "password": "Password123"})
     user_id = add_resp.json()["data"]
 
-    # 需要先登录，因为 delete_user 现在需要鉴权
-    login_resp = await client.post("/user/login", json={"username": "to_delete", "password": "p"})
-    token = login_resp.json()["data"]
-
-    del_resp = await client.get(f"/user/delete/{user_id}", headers={"token": token})
+    del_resp = await auth_client.get(f"/user/delete/{user_id}")
     assert del_resp.json()["data"] is True
 
     # 再查就找不到
-    get_resp = await client.get(f"/user/getById/{user_id}")
+    get_resp = await auth_client.get(f"/user/getById/{user_id}")
     assert get_resp.json()["data"] is None
 
 
 @pytest.mark.asyncio
-async def test_delete_user_not_exist(client: AsyncClient) -> None:
-    await client.post("/user/add", json={"username": "deleter", "password": "p"})
-    login_resp = await client.post("/user/login", json={"username": "deleter", "password": "p"})
-    token = login_resp.json()["data"]
-
-    resp = await client.get("/user/delete/999999", headers={"token": token})
+async def test_delete_user_not_exist(auth_client: AsyncClient) -> None:
+    resp = await auth_client.get("/user/delete/999999")
     assert resp.json()["data"] is False
 
 
 @pytest.mark.asyncio
-async def test_delete_admin_user_forbidden(client: AsyncClient) -> None:
+async def test_delete_admin_user_forbidden(auth_client: AsyncClient) -> None:
     """初始管理员（username=admin）不可删除"""
-    await client.post("/user/add", json={"username": "admin_deleter", "password": "p", "realName": "删除者"})
-    login_resp = await client.post("/user/login", json={"username": "admin_deleter", "password": "p"})
-    token = login_resp.json()["data"]
-
-    add_resp = await client.post("/user/add", json={"username": "admin", "password": "p", "realName": "管理员"})
+    add_resp = await auth_client.post("/user/add", json={"username": "admin", "password": "Password123", "realName": "管理员"})
     admin_id = add_resp.json()["data"]
 
-    del_resp = await client.get(f"/user/delete/{admin_id}", headers={"token": token})
+    del_resp = await auth_client.get(f"/user/delete/{admin_id}")
     body = del_resp.json()
     assert body["code"] != 0
     assert "不可删除" in body["message"]
@@ -318,9 +388,9 @@ async def test_delete_admin_user_forbidden(client: AsyncClient) -> None:
 # 鉴权依赖（通过 /_test/whoami 触发）
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_auth_dep_with_valid_token(client: AsyncClient) -> None:
-    await client.post("/user/add", json={"username": "henry", "password": "p"})
-    login_resp = await client.post("/user/login", json={"username": "henry", "password": "p"})
+async def test_auth_dep_with_valid_token(auth_client: AsyncClient, client: AsyncClient) -> None:
+    await auth_client.post("/user/add", json={"username": "henry", "password": "Password123"})
+    login_resp = await client.post("/user/login", json={"username": "henry", "password": "Password123"})
     token = login_resp.json()["data"]
 
     resp = await client.get("/_test/whoami", headers={"token": token})
@@ -330,10 +400,10 @@ async def test_auth_dep_with_valid_token(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_auth_dep_with_token_via_query_param(client: AsyncClient) -> None:
+async def test_auth_dep_with_token_via_query_param(auth_client: AsyncClient, client: AsyncClient) -> None:
     """复刻 Java TokenUtils 行为：header 没有时也接受 query param"""
-    await client.post("/user/add", json={"username": "iris", "password": "p"})
-    login_resp = await client.post("/user/login", json={"username": "iris", "password": "p"})
+    await auth_client.post("/user/add", json={"username": "iris", "password": "Password123"})
+    login_resp = await client.post("/user/login", json={"username": "iris", "password": "Password123"})
     token = login_resp.json()["data"]
 
     resp = await client.get(f"/_test/whoami?token={token}")
@@ -348,9 +418,9 @@ async def test_auth_dep_missing_token(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_auth_dep_expired_token(client: AsyncClient, db: AsyncSession) -> None:
-    await client.post("/user/add", json={"username": "jack", "password": "p"})
-    login_resp = await client.post("/user/login", json={"username": "jack", "password": "p"})
+async def test_auth_dep_expired_token(auth_client: AsyncClient, client: AsyncClient, db: AsyncSession) -> None:
+    await auth_client.post("/user/add", json={"username": "jack", "password": "Password123"})
+    login_resp = await client.post("/user/login", json={"username": "jack", "password": "Password123"})
     token = login_resp.json()["data"]
 
     # 把 expire_time 改到过去
@@ -364,14 +434,14 @@ async def test_auth_dep_expired_token(client: AsyncClient, db: AsyncSession) -> 
 
 
 @pytest.mark.asyncio
-async def test_update_password_success(client: AsyncClient) -> None:
+async def test_update_password_success(auth_client: AsyncClient, client: AsyncClient) -> None:
     """测试修改密码正常流程"""
     # 先创建用户
-    add_resp = await client.post("/user/add", json={"username": "pwd_test", "password": "old_pw", "realName": "Pwd"})
+    add_resp = await auth_client.post("/user/add", json={"username": "pwd_test", "password": "Oldpass123", "realName": "Pwd"})
     assert add_resp.json()["code"] == 0
 
     # 登录获取 token
-    login_resp = await client.post("/user/login", json={"username": "pwd_test", "password": "old_pw"})
+    login_resp = await client.post("/user/login", json={"username": "pwd_test", "password": "Oldpass123"})
     body = login_resp.json()
     assert body["code"] == 0
     token = body["data"]
@@ -379,7 +449,7 @@ async def test_update_password_success(client: AsyncClient) -> None:
     # 用 token 修改密码
     resp = await client.post(
         "/user/updatePassword",
-        json={"oldPassword": "old_pw", "newPassword": "new_pw"},
+        json={"oldPassword": "Oldpass123", "newPassword": "Newpass123"},
         headers={"token": token},
     )
     result = resp.json()
@@ -388,7 +458,7 @@ async def test_update_password_success(client: AsyncClient) -> None:
     assert result["data"] is True
 
     # 用新密码能登录
-    new_login = await client.post("/user/login", json={"username": "pwd_test", "password": "new_pw"})
+    new_login = await client.post("/user/login", json={"username": "pwd_test", "password": "Newpass123"})
     assert new_login.json()["code"] == 0
 
 
@@ -413,26 +483,21 @@ async def test_update_password_with_invalid_token_returns_not_exist(client: Asyn
 
 
 @pytest.mark.asyncio
-async def test_update_password_for_another_user_by_admin(client: AsyncClient) -> None:
+async def test_update_password_for_another_user_by_admin(auth_client: AsyncClient, client: AsyncClient) -> None:
     """admin 可以跳过旧密码校验，直接重置其他用户的密码"""
-    # 创建 admin
-    await client.post("/user/add", json={"username": "admin2", "password": "admin_pw", "realName": "Admin"})
-    admin_login = await client.post("/user/login", json={"username": "admin2", "password": "admin_pw"})
-    admin_token = admin_login.json()["data"]
-
     # 创建普通用户
-    add_resp = await client.post("/user/add", json={"username": "normal_user", "password": "old_pw", "realName": "Normal"})
+    add_resp = await auth_client.post("/user/add", json={"username": "normal_user", "password": "Oldpass123", "realName": "Normal"})
     normal_id = add_resp.json()["data"]
 
     # admin 重置普通用户密码（旧密码随便填）
     resp = await client.post(
         "/user/updatePassword",
-        json={"id": normal_id, "oldPassword": "whatever", "newPassword": "new_pw"},
-        headers={"token": admin_token},
+        json={"id": normal_id, "oldPassword": "whatever", "newPassword": "Newpass123"},
+        headers={"token": auth_client.headers["token"]},
     )
     result = resp.json()
     assert result["code"] == 0, result
 
     # 普通用户用新密码能登录
-    new_login = await client.post("/user/login", json={"username": "normal_user", "password": "new_pw"})
+    new_login = await client.post("/user/login", json={"username": "normal_user", "password": "Newpass123"})
     assert new_login.json()["code"] == 0

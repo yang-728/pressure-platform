@@ -7,9 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit_helper import record as audit_record
 from app.core.context import UserContext
+from app.core.permissions import PERMISSION_EXECUTION, PERMISSION_TESTCASE
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
+from app.deps.permission import require_any_permission, require_permission
 from app.schemas.scheduled_task import (
     ScheduledTaskLogQuery,
     ScheduledTaskLogVO,
@@ -34,7 +36,7 @@ router = APIRouter(
 )
 async def add_scheduled_task(
     param: ScheduledTaskParam,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[int]:
     id = await service.add_scheduled_task(db, param, current)
@@ -50,7 +52,7 @@ async def add_scheduled_task(
 async def update_scheduled_task(
     id: int,
     param: ScheduledTaskParam,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.update_scheduled_task(db, id, param, current)
@@ -65,7 +67,7 @@ async def update_scheduled_task(
 )
 async def delete_scheduled_task(
     id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.delete_scheduled_task(db, id)
@@ -83,7 +85,7 @@ async def delete_scheduled_task(
 async def toggle_scheduled_task(
     id: int,
     enabled: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.toggle_enabled(db, id, enabled, current)
@@ -101,7 +103,7 @@ async def toggle_scheduled_task(
 )
 async def trigger_scheduled_task(
     id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_any_permission(PERMISSION_TESTCASE, PERMISSION_EXECUTION)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.trigger_now(db, id, current)
@@ -118,6 +120,7 @@ async def trigger_scheduled_task(
 )
 async def list_scheduled_task_logs(
     query: ScheduledTaskLogQuery = Depends(),
+    current: UserContext = Depends(require_any_permission(PERMISSION_TESTCASE, PERMISSION_EXECUTION)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[PageVO[ScheduledTaskLogVO]]:
     page = await service.get_execution_logs(db, query)
@@ -132,6 +135,7 @@ async def list_scheduled_task_logs(
 )
 async def list_scheduled_tasks(
     query: ScheduledTaskQuery = Depends(),
+    current: UserContext = Depends(require_any_permission(PERMISSION_TESTCASE, PERMISSION_EXECUTION)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[PageVO[ScheduledTaskVO]]:
     page = await service.get_scheduled_task_list(db, query)
@@ -146,22 +150,8 @@ async def list_scheduled_tasks(
 )
 async def list_by_test_case(
     test_case_id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[list[ScheduledTaskVO]]:
     tasks = await service.get_by_test_case(db, test_case_id)
     return success(tasks)
-
-
-@router.get(
-    "/trigger/{id}",
-    summary="立即触发定时任务",
-    response_model=Response[bool],
-    response_model_by_alias=True,
-)
-async def trigger_scheduled_task(
-    id: int,
-    current: UserContext = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
-) -> Response[bool]:
-    ok = await service.trigger_now(db, id, current)
-    return success(ok)

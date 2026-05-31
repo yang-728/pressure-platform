@@ -25,6 +25,7 @@ class UserParam(CamelModel):
     username: str | None = None
     password: str | None = None
     real_name: str | None = None
+    role_id: int | None = None
 
 
 class UserVO(CamelModel):
@@ -34,6 +35,9 @@ class UserVO(CamelModel):
     username: str = ""
     password: str = ""
     real_name: str = ""
+    role_id: int = 0
+    role_name: str = ""
+    role_code: str = ""
     effect_time: datetime | None = None
     expire_time: datetime | None = None
 
@@ -57,3 +61,13 @@ class UserQuery(BaseQuery):
 
     username: str | None = None
     real_name: str | None = None
+
+
+class CurrentUserVO(CamelModel):
+    id: int
+    username: str = ""
+    real_name: str = ""
+    role_id: int = 0
+    role_code: str = ""
+    role_name: str = ""
+    permissions: list[str] = []

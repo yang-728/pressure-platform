@@ -16,6 +16,7 @@ class Csv(Base, AuditMixin):
     dst_name: Mapped[str] = mapped_column(String(255), default="", server_default="")
     description: Mapped[str] = mapped_column(String(255), default="", server_default="")
     csv_dir: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    distribution_strategy: Mapped[str] = mapped_column(String(32), default="shared", server_default="shared")
     test_case_id: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
 
     __table_args__ = (Index("idx_test_case_id_csv", "test_case_id"),)

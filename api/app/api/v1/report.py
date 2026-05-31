@@ -15,9 +15,11 @@ from app.core.audit_helper import record as audit_record
 from app.core.codes import Codes
 from app.core.context import UserContext
 from app.core.exceptions import MysteriousException
+from app.core.permissions import PERMISSION_EXECUTION, PERMISSION_REPORT
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
+from app.deps.permission import require_any_permission, require_permission
 from app.schemas.report import ArtifactVO, CompareVO, MetricsVO, ReportByTestCaseQuery, ReportQuery, ReportStatsVO, ReportVO
 from app.schemas.testcase import JMeterResultVO
 from app.services import report as service
@@ -37,6 +39,7 @@ router = APIRouter(
 )
 async def get_report_list(
     query: ReportQuery = Depends(),
+    current: UserContext = Depends(require_any_permission(PERMISSION_REPORT, PERMISSION_EXECUTION)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[PageVO[ReportVO]]:
     page = await service.get_report_list(db, query)
@@ -51,6 +54,7 @@ async def get_report_list(
 )
 async def get_report_list_by_test_case(
     query: ReportByTestCaseQuery = Depends(),
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[PageVO[ReportVO]]:
     page = await service.get_report_list_by_test_case(db, query)
@@ -65,6 +69,7 @@ async def get_report_list_by_test_case(
 )
 async def report_stats(
     query: ReportQuery = Depends(),
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[ReportStatsVO]:
     stats = await service.get_report_stats(db, query)
@@ -79,6 +84,7 @@ async def report_stats(
 )
 async def get_by_id(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[ReportVO | None]:
     obj = await service.get_by_id(db, id)
@@ -93,7 +99,7 @@ async def get_by_id(
 )
 async def clean_report(
     id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.clean_report(db, id)
@@ -108,6 +114,7 @@ async def clean_report(
 )
 async def download_report(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     zip_path = await service.download_report(db, id)
@@ -127,6 +134,7 @@ async def download_report(
 )
 async def view_report(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[str]:
     url = await service.view_report(db, id)
@@ -141,6 +149,7 @@ async def view_report(
 )
 async def grafana_url(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[str]:
     url = await service.get_grafana_url(db, id)
@@ -155,6 +164,7 @@ async def grafana_url(
 )
 async def list_artifacts(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[list[ArtifactVO]]:
     items = await service.list_artifacts(db, id)
@@ -168,6 +178,7 @@ async def list_artifacts(
 async def download_artifact(
     id: int,
     name: str,
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     path = await service.download_artifact(db, id, name)
@@ -189,6 +200,7 @@ async def compare_reports(
     baseId: int,
     targetId: int,
     window: int = 5,
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[CompareVO]:
     data = await service.compare_reports(db, baseId, targetId, window)
@@ -204,6 +216,7 @@ async def compare_reports(
 async def get_metrics(
     id: int,
     window: int = 5,
+    current: UserContext = Depends(require_any_permission(PERMISSION_REPORT, PERMISSION_EXECUTION)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[list[MetricsVO]]:
     items = await service.get_jtl_metrics(db, id, window)
@@ -218,6 +231,7 @@ async def get_metrics(
 )
 async def get_jmeter_result_by_report(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[list[JMeterResultVO]]:
     items = await service.get_jmeter_result_by_report(db, id)
@@ -232,6 +246,7 @@ async def get_jmeter_result_by_report(
 )
 async def get_jmeter_log(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_REPORT)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[str]:
     content = await service.get_jmeter_log(db, id)

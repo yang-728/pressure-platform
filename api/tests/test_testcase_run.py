@@ -202,6 +202,174 @@ async def test_run_creates_report_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_run_applies_thread_group_overrides(
+    auth_client: AsyncClient,
+    data_home: Path,
+    jmeter_bin_home: Path,
+    sample_jmx_bytes: bytes,
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+    real_launch = jmeter_runner.launch_jmeter
+
+    async def spy(cmd, **kw):
+        captured["cmd"] = cmd
+        return await real_launch(cmd, **kw)
+
+    monkeypatch.setattr(jmeter_runner, "launch_jmeter", spy)
+
+    case_id = await _create_case_with_jmx(auth_client, "r_tg_override", sample_jmx_bytes)
+    groups = await auth_client.get(f"/testcase/runThreadGroups/{case_id}")
+    assert groups.json()["data"] == [
+        {"key": "thread_group:0", "name": "Default ThreadGroup", "type": "thread_group", "enabled": True},
+        {"key": "stepping_thread_group:1", "name": "Disabled Stepping", "type": "stepping_thread_group", "enabled": False},
+        {"key": "concurrency_thread_group:2", "name": "Concurrency Group", "type": "concurrency_thread_group", "enabled": True},
+    ]
+
+    resp = await auth_client.post(
+        f"/testcase/run/{case_id}",
+        json={
+            "numThreads": "30",
+            "rampTime": "10",
+            "duration": "600",
+            "slaveCount": 0,
+            "threadGroupOverrides": [
+                {
+                    "name": "Default ThreadGroup",
+                    "mode": "custom",
+                    "numThreads": "1",
+                    "rampTime": "1",
+                    "duration": "60",
+                },
+                {"name": "Concurrency Group", "mode": "fixed"},
+            ],
+        },
+    )
+    assert resp.json()["code"] == 0
+    await jmeter_runner.wait_for_completion(case_id, timeout=10.0)
+
+    run_jmx = Path(captured["cmd"][captured["cmd"].index("-t") + 1])
+    from lxml import etree
+
+    tree = etree.parse(str(run_jmx))
+    values: dict[tuple[str, str], str] = {}
+    for tag in ("ThreadGroup", "com.blazemeter.jmeter.threads.concurrency.ConcurrencyThreadGroup"):
+        for parent in tree.iter(tag):
+            testname = parent.get("testname") or ""
+            for prop in parent.iter():
+                name = prop.get("name")
+                if name:
+                    values[(testname, name)] = prop.text or ""
+    assert values[("Default ThreadGroup", "ThreadGroup.num_threads")] == "1"
+    assert values[("Default ThreadGroup", "ThreadGroup.ramp_time")] == "1"
+    assert values[("Default ThreadGroup", "ThreadGroup.duration")] == "60"
+    assert values[("Concurrency Group", "TargetLevel")] == "100"
+    assert values[("Concurrency Group", "Hold")] == "300"
+
+
+@pytest.mark.asyncio
+async def test_run_splits_custom_thread_group_threads_per_slave(
+    auth_client: AsyncClient,
+    data_home: Path,
+    jmeter_bin_home: Path,
+    sample_jmx_bytes: bytes,
+    db: AsyncSession,
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+    real_launch = jmeter_runner.launch_jmeter
+
+    async def spy(cmd, **kw):
+        captured["cmd"] = cmd
+        return await real_launch(cmd, **kw)
+
+    monkeypatch.setattr(jmeter_runner, "launch_jmeter", spy)
+
+    case_id = await _create_case_with_jmx(auth_client, "r_tg_split", sample_jmx_bytes)
+    for h in ("10.0.10.1", "10.0.10.2"):
+        db.add(
+            Node(
+                name=h,
+                type=NodeType.SLAVE.value,
+                host=h,
+                username="root",
+                password="x",
+                port=22,
+                status=NodeStatus.ENABLE.value,
+                health_status=1,
+            )
+        )
+    await db.commit()
+
+    resp = await auth_client.post(
+        f"/testcase/run/{case_id}",
+        json={
+            "numThreads": "30",
+            "rampTime": "10",
+            "duration": "600",
+            "slaveCount": 2,
+            "threadGroupOverrides": [
+                {
+                    "name": "Default ThreadGroup",
+                    "mode": "custom",
+                    "numThreads": "100",
+                    "rampTime": "1",
+                    "duration": "60",
+                }
+            ],
+        },
+    )
+    assert resp.json()["code"] == 0
+    await jmeter_runner.wait_for_completion(case_id, timeout=10.0)
+
+    from lxml import etree
+
+    run_jmx = Path(captured["cmd"][captured["cmd"].index("-t") + 1])
+    tree = etree.parse(str(run_jmx))
+    for parent in tree.iter("ThreadGroup"):
+        if parent.get("testname") == "Default ThreadGroup":
+            for prop in parent.iter():
+                if prop.get("name") == "ThreadGroup.num_threads":
+                    assert prop.text == "50"
+                    return
+    pytest.fail("未找到 Default ThreadGroup 线程数配置")
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_stale_thread_group_override_key(
+    auth_client: AsyncClient,
+    data_home: Path,
+    jmeter_bin_home: Path,
+    sample_jmx_bytes: bytes,
+) -> None:
+    case_id = await _create_case_with_jmx(auth_client, "r_tg_stale", sample_jmx_bytes)
+
+    resp = await auth_client.post(
+        f"/testcase/run/{case_id}",
+        json={
+            "numThreads": "30",
+            "rampTime": "10",
+            "duration": "600",
+            "slaveCount": 0,
+            "threadGroupOverrides": [
+                {
+                    "key": "thread_group:0",
+                    "name": "Old ThreadGroup Name",
+                    "mode": "custom",
+                    "numThreads": "1",
+                    "rampTime": "1",
+                    "duration": "60",
+                }
+            ],
+        },
+    )
+
+    body = resp.json()
+    assert body["code"] == -1
+    assert "线程组配置已过期" in body["message"]
+
+
+@pytest.mark.asyncio
 async def test_run_with_region_without_healthy_slave_does_not_create_report(
     auth_client: AsyncClient,
     data_home: Path,
@@ -328,6 +496,134 @@ async def test_run_syncs_current_case_dependencies_to_selected_slaves(
     assert all(call[2] is True for call in scp_calls)
     assert any(local_path.endswith("/csv/data.csv") for local_path, _, _ in scp_calls)
     assert any(local_path.endswith("/jar/dep.jar") for local_path, _, _ in scp_calls)
+
+
+@pytest.mark.asyncio
+async def test_run_splits_marked_csv_per_slave_and_rewrites_run_jmx(
+    auth_client: AsyncClient,
+    data_home: Path,
+    jmeter_bin_home: Path,
+    sample_jmx_bytes: bytes,
+    db: AsyncSession,
+    monkeypatch,
+) -> None:
+    """仅标记为 split_by_slave 的 CSV 会按本次 slave 切片，并改写 run JMX 到执行专属路径。"""
+    from app.core import ssh as ssh_mod
+    from app.models.csv import Csv
+
+    captured: dict = {}
+    real_launch = jmeter_runner.launch_jmeter
+
+    async def spy(cmd, **kw):
+        captured["cmd"] = cmd
+        return await real_launch(cmd, **kw)
+
+    monkeypatch.setattr(jmeter_runner, "launch_jmeter", spy)
+
+    case_id = await _create_case_with_jmx(auth_client, "r_split_csv", sample_jmx_bytes)
+    await auth_client.post(
+        f"/csv/upload/{case_id}",
+        files={"csvFile": ("data.csv", b"h1,h2\n1,a\n2,b\n3,c\n4,d\n", "text/csv")},
+    )
+    csv_obj = (await db.execute(select(Csv).where(Csv.test_case_id == case_id))).scalar_one()
+    csv_obj.distribution_strategy = "split_by_slave"
+
+    for h in ("10.0.8.1", "10.0.8.2"):
+        db.add(
+            Node(
+                name=h,
+                type=NodeType.SLAVE.value,
+                host=h,
+                username="root",
+                password="x",
+                port=22,
+                status=NodeStatus.ENABLE.value,
+                health_status=1,
+            )
+        )
+    await db.commit()
+
+    scp_payloads: dict[str, bytes] = {}
+
+    async def capture_scp(self, local_path: str, remote_dir: str, *, raise_on_error: bool = False) -> None:
+        if "runtime_csv" in local_path:
+            scp_payloads[self.host] = Path(local_path).read_bytes()
+
+    monkeypatch.setattr(ssh_mod.SSHClient, "scp_file", capture_scp)
+
+    resp = await auth_client.post(
+        f"/testcase/run/{case_id}",
+        json={"numThreads": "20", "rampTime": "0", "duration": "60", "slaveCount": 2},
+    )
+    assert resp.json()["code"] == 0
+    await jmeter_runner.wait_for_completion(case_id, timeout=10.0)
+
+    assert set(scp_payloads) == {"10.0.8.1", "10.0.8.2"}
+    assert scp_payloads["10.0.8.1"] == b"h1,h2\n1,a\n3,c\n"
+    assert scp_payloads["10.0.8.2"] == b"h1,h2\n2,b\n4,d\n"
+
+    run_jmx = Path(captured["cmd"][captured["cmd"].index("-t") + 1])
+    assert "runtime_csv" in run_jmx.read_text(encoding="utf-8")
+    assert "report/" in run_jmx.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_run_splits_marked_csv_without_ignore_first_line(
+    auth_client: AsyncClient,
+    data_home: Path,
+    jmeter_bin_home: Path,
+    sample_jmx_bytes: bytes,
+    db: AsyncSession,
+    monkeypatch,
+) -> None:
+    """JMX 未配置 ignoreFirstLine 时，第一行也必须作为数据切片，避免 .dat/无表头文件丢数据。"""
+    from app.core import ssh as ssh_mod
+    from app.models.csv import Csv
+
+    jmx_bytes = sample_jmx_bytes.replace(
+        b'<boolProp name="ignoreFirstLine">true</boolProp>',
+        b'<boolProp name="ignoreFirstLine">false</boolProp>',
+    )
+    case_id = await _create_case_with_jmx(auth_client, "r_split_dat", jmx_bytes)
+    await auth_client.post(
+        f"/csv/upload/{case_id}",
+        files={"csvFile": ("data.csv", b"1,a\n2,b\n3,c\n4,d\n", "text/csv")},
+    )
+    csv_obj = (await db.execute(select(Csv).where(Csv.test_case_id == case_id))).scalar_one()
+    csv_obj.distribution_strategy = "split_by_slave"
+
+    for h in ("10.0.9.1", "10.0.9.2"):
+        db.add(
+            Node(
+                name=h,
+                type=NodeType.SLAVE.value,
+                host=h,
+                username="root",
+                password="x",
+                port=22,
+                status=NodeStatus.ENABLE.value,
+                health_status=1,
+            )
+        )
+    await db.commit()
+
+    scp_payloads: dict[str, bytes] = {}
+
+    async def capture_scp(self, local_path: str, remote_dir: str, *, raise_on_error: bool = False) -> None:
+        if "runtime_csv" in local_path:
+            scp_payloads[self.host] = Path(local_path).read_bytes()
+
+    monkeypatch.setattr(ssh_mod.SSHClient, "scp_file", capture_scp)
+
+    resp = await auth_client.post(
+        f"/testcase/run/{case_id}",
+        json={"numThreads": "20", "rampTime": "0", "duration": "60", "slaveCount": 2},
+    )
+    assert resp.json()["code"] == 0
+    await jmeter_runner.wait_for_completion(case_id, timeout=10.0)
+
+    assert scp_payloads["10.0.9.1"] == b"1,a\n3,c\n"
+    assert scp_payloads["10.0.9.2"] == b"2,b\n4,d\n"
 
 
 # ---------------------------------------------------------------------------

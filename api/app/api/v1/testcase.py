@@ -8,9 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit_helper import record as audit_record
 from app.core.context import UserContext
+from app.core.permissions import PERMISSION_EXECUTION, PERMISSION_TESTCASE
 from app.core.response import PageVO, Response, success
 from app.db.session import get_db
 from app.deps.auth import get_current_user_dep
+from app.deps.permission import require_any_permission, require_permission
 from app.schemas.testcase import (
     BatchDeleteParam,
     JMeterResultVO,
@@ -20,6 +22,7 @@ from app.schemas.testcase import (
     TestCaseQuery,
     TestCaseStatsVO,
     TestCaseVO,
+    ThreadGroupRunVO,
 )
 from app.services import testcase as service
 
@@ -38,7 +41,7 @@ router = APIRouter(
 )
 async def add_testcase(
     param: TestCaseParam,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[int]:
     id = await service.add_testcase(db, param, current)
@@ -54,7 +57,7 @@ async def add_testcase(
 async def update_testcase(
     id: int,
     param: TestCaseParam,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.update_testcase(db, id, param, current)
@@ -69,7 +72,7 @@ async def update_testcase(
 )
 async def delete_testcase(
     id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.delete_testcase(db, id)
@@ -86,6 +89,7 @@ async def delete_testcase(
 )
 async def batch_delete_testcase(
     param: BatchDeleteParam,
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.batch_delete_testcase(db, param.ids)
@@ -100,6 +104,7 @@ async def batch_delete_testcase(
 )
 async def list_testcases(
     query: TestCaseQuery = Depends(),
+    current: UserContext = Depends(require_any_permission(PERMISSION_TESTCASE, PERMISSION_EXECUTION)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[PageVO[TestCaseVO]]:
     page = await service.get_testcase_list(db, query)
@@ -114,6 +119,7 @@ async def list_testcases(
 )
 async def testcase_stats(
     query: TestCaseQuery = Depends(),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[TestCaseStatsVO]:
     stats = await service.get_testcase_stats(db, query)
@@ -128,7 +134,7 @@ async def testcase_stats(
 )
 async def debug_testcase(
     id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.debug_testcase(db, id, current)
@@ -144,11 +150,26 @@ async def debug_testcase(
 async def run_testcase(
     id: int,
     param: RunParam,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.run_testcase(db, id, param, current)
     return success(ok)
+
+
+@router.get(
+    "/runThreadGroups/{id}",
+    summary="查询用例 JMX 中可配置的线程组",
+    response_model=Response[list[ThreadGroupRunVO]],
+    response_model_by_alias=True,
+)
+async def run_thread_groups(
+    id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
+    db: AsyncSession = Depends(get_db),
+) -> Response[list[ThreadGroupRunVO]]:
+    items = await service.list_run_thread_groups(db, id)
+    return success([ThreadGroupRunVO.model_validate(item) for item in items])
 
 
 @router.get(
@@ -159,7 +180,7 @@ async def run_testcase(
 )
 async def stop_testcase(
     id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.stop_testcase(db, id, current)
@@ -174,7 +195,7 @@ async def stop_testcase(
 )
 async def stop_execution(
     report_id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_any_permission(PERMISSION_TESTCASE, PERMISSION_EXECUTION)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.stop_execution(db, report_id, current)
@@ -189,6 +210,7 @@ async def stop_execution(
 )
 async def get_full(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[TestCaseFullVO | None]:
     obj = await service.get_full_vo(db, id)
@@ -203,7 +225,7 @@ async def get_full(
 )
 async def sync_node(
     node_id: int,
-    current: UserContext = Depends(get_current_user_dep),
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[bool]:
     ok = await service.sync_node(db, node_id, current)
@@ -218,6 +240,7 @@ async def sync_node(
 )
 async def get_jmeter_result(
     id: int,
+    current: UserContext = Depends(require_permission(PERMISSION_TESTCASE)),
     db: AsyncSession = Depends(get_db),
 ) -> Response[list[JMeterResultVO]]:
     items = await service.get_jmeter_result(db, id)
